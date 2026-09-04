@@ -1,0 +1,27 @@
+[Unit]
+Description=crypto-lab personal cryptography API
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+ExecStart=/usr/local/bin/crypto-lab
+Restart=on-failure
+RestartSec=3s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
