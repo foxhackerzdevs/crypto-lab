@@ -74,6 +74,7 @@ struct ErrorBody {
     error: String,
 }
 
+#[derive(Debug)]
 struct ApiError(StatusCode, &'static str);
 
 impl IntoResponse for ApiError {
