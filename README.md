@@ -23,11 +23,40 @@ All operation requests must use `Content-Type: application/json`. Text fields ar
 | Method | Route | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/health` | No | Service health |
+| GET | `/v1/info` | No | Non-sensitive application metadata and endpoint discovery |
 | POST | `/v1/hash` | Basic Auth at Nginx | SHA-256 or SHA-512 digest |
 | POST | `/v1/hmac` | Basic Auth at Nginx | HMAC generation |
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://example.com/crypto-api/v1/hash`.
+
+### Application information
+
+Request:
+
+```bash
+curl -sS https://example.com/crypto-api/v1/info
+```
+
+Response:
+
+```json
+{
+  "service": "crypto-lab",
+  "api": "v1",
+  "version": "0.1.0",
+  "endpoints": [
+    "GET /health",
+    "GET /v1/info",
+    "POST /v1/hash",
+    "POST /v1/hmac",
+    "POST /v1/hmac/verify"
+  ],
+  "build_profile": "release"
+}
+```
+
+The information endpoint is public and exposes only non-sensitive application metadata.
 
 ### Hash
 
@@ -130,6 +159,10 @@ A representative location block is:
 ```nginx
 location = /crypto-api/health {
   proxy_pass http://127.0.0.1:8089/health;
+}
+
+location = /crypto-api/v1/info {
+    proxy_pass http://127.0.0.1:8089/v1/info;
 }
 
 location /crypto-api/ {

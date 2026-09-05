@@ -20,6 +20,15 @@ struct Health {
     service: &'static str,
 }
 
+#[derive(Serialize)]
+struct Info {
+    service: &'static str,
+    api: &'static str,
+    version: &'static str,
+    endpoints: [&'static str; 5],
+    build_profile: &'static str,
+}
+
 #[derive(Deserialize)]
 struct HashRequest {
     algorithm: String,
@@ -139,6 +148,26 @@ async fn health() -> Json<Health> {
     })
 }
 
+async fn info() -> Json<Info> {
+    Json(Info {
+        service: "crypto-lab",
+        api: "v1",
+        version: env!("CARGO_PKG_VERSION"),
+        endpoints: [
+            "GET /health",
+            "GET /v1/info",
+            "POST /v1/hash",
+            "POST /v1/hmac",
+            "POST /v1/hmac/verify",
+        ],
+        build_profile: if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        },
+    })
+}
+
 async fn hash(Json(request): Json<HashRequest>) -> Result<Json<HashResponse>, ApiError> {
     let algorithm = Algorithm::parse(&request.algorithm)?;
     validate_input(&request.data)?;
@@ -183,6 +212,7 @@ async fn verify(Json(request): Json<VerifyRequest>) -> Result<Json<VerifyRespons
 fn app() -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/info", get(info))
         .route("/v1/hash", post(hash))
         .route("/v1/hmac", post(hmac))
         .route("/v1/hmac/verify", post(verify))
@@ -253,6 +283,23 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
         assert_eq!(body["service"], "crypto-lab");
+    }
+
+    #[tokio::test]
+    async fn returns_public_info_response() {
+        let (status, body) = json_response(
+            Request::get("/v1/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["service"], "crypto-lab");
+        assert_eq!(body["api"], "v1");
+        assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(body["build_profile"], "debug");
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 5);
     }
 
     #[tokio::test]
