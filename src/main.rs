@@ -27,6 +27,7 @@ struct Info {
     version: &'static str,
     endpoints: [&'static str; 5],
     build_profile: &'static str,
+    environment: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -165,6 +166,7 @@ async fn info() -> Json<Info> {
         } else {
             "release"
         },
+        environment: option_env!("LAB_API_ENV").unwrap_or("unknown"),
     })
 }
 
@@ -299,6 +301,7 @@ mod tests {
         assert_eq!(body["api"], "v1");
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(body["build_profile"], "debug");
+        assert_eq!(body["environment"], "unknown");
         assert_eq!(body["endpoints"].as_array().unwrap().len(), 5);
     }
 

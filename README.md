@@ -52,11 +52,12 @@ Response:
     "POST /v1/hmac",
     "POST /v1/hmac/verify"
   ],
-  "build_profile": "release"
+  "build_profile": "release",
+  "environment": "production"
 }
 ```
 
-The information endpoint is public and exposes only non-sensitive application metadata.
+The information endpoint is public and exposes only non-sensitive application metadata. `environment` comes from the optional `LAB_API_ENV` deployment label and defaults to `unknown`; it must never contain secrets.
 
 ### Hash
 
