@@ -173,7 +173,7 @@ location /crypto-api/ {
 }
 ```
 
-The exact health match keeps `/crypto-api/health` unauthenticated. The trailing slash on the authenticated location preserves the backend route shape: `/crypto-api/v1/hash` becomes `/v1/hash`.
+The exact health and info matches keep `/crypto-api/health` and `/crypto-api/v1/info` unauthenticated. The trailing slash on the authenticated location preserves the backend route shape: `/crypto-api/v1/hash` becomes `/v1/hash`.
 
 ## systemd
 
