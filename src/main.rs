@@ -301,7 +301,14 @@ mod tests {
         assert_eq!(body["service"], "crypto-lab");
         assert_eq!(body["api"], "v1");
         assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(body["build_profile"], "debug");
+        assert_eq!(
+            body["build_profile"],
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
         assert_eq!(
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
