@@ -245,7 +245,9 @@ mod tests {
     async fn json_response(request: Request<Body>) -> (StatusCode, Value) {
         let response = app().oneshot(request).await.unwrap();
         let status = response.status();
-        let body = to_bytes(response.into_body(), MAX_BODY_BYTES).await.unwrap();
+        let body = to_bytes(response.into_body(), MAX_BODY_BYTES)
+            .await
+            .unwrap();
 
         (status, serde_json::from_slice(&body).unwrap())
     }
@@ -276,12 +278,8 @@ mod tests {
 
     #[tokio::test]
     async fn returns_health_response() {
-        let (status, body) = json_response(
-            Request::get("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
+        let (status, body) =
+            json_response(Request::get("/health").body(Body::empty()).unwrap()).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
@@ -290,12 +288,8 @@ mod tests {
 
     #[tokio::test]
     async fn returns_public_info_response() {
-        let (status, body) = json_response(
-            Request::get("/v1/info")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await;
+        let (status, body) =
+            json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["service"], "crypto-lab");
