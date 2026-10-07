@@ -28,14 +28,14 @@ All operation requests must use `Content-Type: application/json`. Text fields ar
 | POST | `/v1/hmac` | Basic Auth at Nginx | HMAC generation |
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
 
-The public equivalents use the `/crypto-api/` prefix, for example `https://example.com/crypto-api/v1/hash`.
+The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/hash`.
 
 ### Application information
 
 Request:
 
 ```bash
-curl -sS https://example.com/crypto-api/v1/info
+curl -sS https://abhrankan.duckdns.org/crypto-api/v1/info
 ```
 
 Response:
