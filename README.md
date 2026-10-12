@@ -7,14 +7,14 @@ A small self-hosted Rust service for hashing, HMAC, and number-theoretic cryptog
 ```text
 Internet
    |
-HTTPS :443
+HTTPS :443 (abhrankan.duckdns.org)
    |
-Nginx
-   |-- /api/*        -> 127.0.0.1:8088 -> lab-api
-   `-- /crypto-api/* -> 127.0.0.1:8089 -> crypto-lab
+Nginx (TLS termination & auth)
+   |-- /school/*, /api/* -> 127.0.0.1:8088 (lab-api)
+   `-- /crypto-api/*     -> 127.0.0.1:8089 (crypto-lab)
 ```
 
-The Rust service binds to `127.0.0.1:8089`. Nginx terminates HTTPS, optionally applies Basic Auth, and proxies the public `/crypto-api/` prefix to the local service.
+The Rust service binds to `127.0.0.1:8089`. Nginx terminates HTTPS, applies HTTP Basic Auth where configured, and proxies the public `/crypto-api/` prefix to the local service.
 
 JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoints support both `GET` (query parameters) for instant browser/CLI exploration and `POST` (JSON bodies) for programmatic pipelines.
 
@@ -27,13 +27,13 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | POST | `/v1/hash` | Basic Auth at Nginx | SHA-256 or SHA-512 digest |
 | POST | `/v1/hmac` | Basic Auth at Nginx | HMAC generation |
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
-| GET / POST | `/v1/math/legendre` | Configurable | Legendre symbol $(a/p)$ via Euler's criterion |
-| GET / POST | `/v1/math/sqrtmod` | Configurable | Modular square roots via Tonelli-Shanks |
-| GET / POST | `/v1/math/crt` | Configurable | Chinese Remainder Theorem solver (Extended GCD) |
-| GET / POST | `/v1/math/cf` | Configurable | Continued fraction expansion & convergents |
-| GET / POST | `/v1/math/ecadd` | Configurable | Elliptic curve point addition over $\mathbb{F}_p$ |
-| GET / POST | `/v1/math/ecmul` | Configurable | Elliptic curve scalar multiplication $k \cdot P$ |
-| GET / POST | `/v1/math/challenge` | Configurable | Seeded, reproducible math & crypto challenges |
+| GET / POST | `/v1/math/legendre` | Configurable (Public or Basic Auth) | Legendre symbol $(a/p)$ via Euler's criterion |
+| GET / POST | `/v1/math/sqrtmod` | Configurable (Public or Basic Auth) | Modular square roots via Tonelli-Shanks |
+| GET / POST | `/v1/math/crt` | Configurable (Public or Basic Auth) | Chinese Remainder Theorem solver (Extended GCD) |
+| GET / POST | `/v1/math/cf` | Configurable (Public or Basic Auth) | Continued fraction expansion & convergents |
+| GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
+| GET / POST | `/v1/math/ecmul` | Configurable (Public or Basic Auth) | Elliptic curve scalar multiplication $k \cdot P$ |
+| GET / POST | `/v1/math/challenge` | Configurable (Public or Basic Auth) | Seeded, reproducible math & crypto challenges |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -51,7 +51,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -264,10 +264,10 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legen
 
 - Request bodies are limited to 64 KiB.
 - Each textual input (`data`, `key`, and `mac`) is limited to 32 KiB.
-- `200 OK`: successful health, hash, generation, or verification request.
-- `400 Bad Request`: unsupported algorithm or malformed MAC.
+- `200 OK`: successful health, hash, generation, verification, or math calculation request.
+- `400 Bad Request`: unsupported algorithm, malformed MAC, invalid query parameters, or mathematical domain error (e.g., $p$ not an odd prime, quadratic non-residue in modular square roots, inconsistent CRT system, zero denominator, or negative scalar $k$).
 - `415 Unsupported Media Type`: operation request does not use `application/json`.
-- `401 Unauthorized`: missing or invalid Basic Auth at Nginx for crypto operations.
+- `401 Unauthorized`: missing or invalid Basic Auth at Nginx for protected operations.
 - `413 Payload Too Large`: body or textual input exceeds its limit.
 - `404 Not Found`: route does not exist.
 
@@ -278,37 +278,90 @@ With Rust and Cargo installed:
 ```bash
 cargo test
 cargo run
+
+# Health & metadata
 curl -sS http://127.0.0.1:8089/health
-curl -sS -u 'username:password' \
-  -H 'content-type: application/json' \
+curl -sS http://127.0.0.1:8089/v1/info
+
+# Cryptographic primitives (direct to local service; no Basic Auth required)
+curl -sS -H 'content-type: application/json' \
   -d '{"algorithm":"sha256","data":"hello"}' \
   http://127.0.0.1:8089/v1/hash
+
+# Number theory & elliptic curves (GET or POST)
+curl -sS "http://127.0.0.1:8089/v1/math/sqrtmod?a=10&p=13"
+curl -sS -H 'content-type: application/json' \
+  -d '{"curve":"toy193","k":7}' \
+  http://127.0.0.1:8089/v1/math/ecmul
 ```
+
+Authentication (HTTP Basic Auth) is enforced exclusively upstream at Nginx for production deployments (`/crypto-api/`). When hitting `127.0.0.1:8089` directly during local development, no credentials are required.
 
 The service is intentionally not a wallet, miner, exchange, payment processor, or key-management system. Do not send private keys or production secrets to it.
 
 ## Nginx routing
 
-A representative location block is:
+A representative location configuration from the production server (`/etc/nginx/conf.d/abhrankan.conf`) is:
 
 ```nginx
 location = /crypto-api/health {
-  proxy_pass http://127.0.0.1:8089/health;
+    proxy_pass http://127.0.0.1:8089/health;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
 }
 
 location = /crypto-api/v1/info {
     proxy_pass http://127.0.0.1:8089/v1/info;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
 }
 
-# Optional: expose math endpoints publicly for web playgrounds / exploration
+# Optional: expose math endpoints publicly for educational tools / playgrounds
 location /crypto-api/v1/math/ {
     proxy_pass http://127.0.0.1:8089/v1/math/;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
 }
 
 location /crypto-api/ {
     auth_basic "crypto-lab";
-    auth_basic_user_file /etc/nginx/.htpasswd;
+    auth_basic_user_file /etc/nginx/status.htpasswd;
+
     proxy_pass http://127.0.0.1:8089/;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    proxy_send_timeout 30s;
 }
 ```
 
