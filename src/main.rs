@@ -1,5 +1,7 @@
+mod math;
+
 use axum::{
-    extract::{DefaultBodyLimit, Json},
+    extract::{DefaultBodyLimit, Json, Query},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -14,6 +16,28 @@ use subtle::ConstantTimeEq;
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 32 * 1024;
 
+const ENDPOINTS: [&str; 19] = [
+    "GET /health",
+    "GET /v1/info",
+    "POST /v1/hash",
+    "POST /v1/hmac",
+    "POST /v1/hmac/verify",
+    "GET /v1/math/legendre",
+    "POST /v1/math/legendre",
+    "GET /v1/math/sqrtmod",
+    "POST /v1/math/sqrtmod",
+    "GET /v1/math/crt",
+    "POST /v1/math/crt",
+    "GET /v1/math/cf",
+    "POST /v1/math/cf",
+    "GET /v1/math/ecadd",
+    "POST /v1/math/ecadd",
+    "GET /v1/math/ecmul",
+    "POST /v1/math/ecmul",
+    "GET /v1/math/challenge",
+    "POST /v1/math/challenge",
+];
+
 #[derive(Serialize)]
 struct Health {
     ok: bool,
@@ -25,7 +49,7 @@ struct Info {
     service: &'static str,
     api: &'static str,
     version: &'static str,
-    endpoints: [&'static str; 5],
+    endpoints: [&'static str; 19],
     build_profile: &'static str,
     environment: &'static str,
 }
@@ -74,8 +98,8 @@ struct ErrorBody {
     error: String,
 }
 
-#[derive(Debug)]
-struct ApiError(StatusCode, &'static str);
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApiError(pub StatusCode, pub &'static str);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -87,6 +111,128 @@ impl IntoResponse for ApiError {
         )
             .into_response()
     }
+}
+
+// ------------------- Math Request & Response Types -------------------
+
+#[derive(Deserialize, Clone)]
+struct LegendreRequest {
+    a: i64,
+    p: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct LegendreResponse {
+    a: i64,
+    p: i64,
+    value: i32,
+}
+
+#[derive(Deserialize, Clone)]
+struct SqrtModRequest {
+    a: i64,
+    p: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct SqrtModResponse {
+    a: i64,
+    p: i64,
+    roots: Vec<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CrtRequest {
+    remainders: Option<Vec<i64>>,
+    moduli: Option<Vec<i64>>,
+    r: Option<String>,
+    m: Option<String>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct CrtResponse {
+    remainders: Vec<i64>,
+    moduli: Vec<i64>,
+    x: i64,
+    modulus: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct CfRequest {
+    num: i64,
+    den: i64,
+    terms: Option<usize>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct CfResponse {
+    num: i64,
+    den: i64,
+    cf: Vec<i64>,
+    convergents: Vec<[i64; 2]>,
+}
+
+#[derive(Deserialize, Clone)]
+struct EcAddRequest {
+    curve: Option<String>,
+    p1: Option<[i64; 2]>,
+    p2: Option<[i64; 2]>,
+    x1: Option<i64>,
+    y1: Option<i64>,
+    x2: Option<i64>,
+    y2: Option<i64>,
+    a: Option<i64>,
+    b: Option<i64>,
+    p: Option<i64>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct EcAddResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    curve: Option<String>,
+    p1: [i64; 2],
+    p2: [i64; 2],
+    result: Option<[i64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_on_curve: Option<bool>,
+}
+
+#[derive(Deserialize, Clone)]
+struct EcMulRequest {
+    curve: Option<String>,
+    k: i64,
+    point: Option<[i64; 2]>,
+    x: Option<i64>,
+    y: Option<i64>,
+    a: Option<i64>,
+    b: Option<i64>,
+    p: Option<i64>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct EcMulResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    curve: Option<String>,
+    k: i64,
+    point: [i64; 2],
+    result: Option<[i64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_on_curve: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct ChallengeRequest {
+    topic: Option<String>,
+    count: Option<usize>,
+    seed: Option<u64>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct ChallengeResponse {
+    topic: String,
+    seed: u64,
+    count: usize,
+    problems: Vec<math::ChallengeProblem>,
 }
 
 #[derive(Clone, Copy)]
@@ -155,13 +301,7 @@ async fn info() -> Json<Info> {
         service: "crypto-lab",
         api: "v1",
         version: env!("CARGO_PKG_VERSION"),
-        endpoints: [
-            "GET /health",
-            "GET /v1/info",
-            "POST /v1/hash",
-            "POST /v1/hmac",
-            "POST /v1/hmac/verify",
-        ],
+        endpoints: ENDPOINTS,
         build_profile: if cfg!(debug_assertions) {
             "debug"
         } else {
@@ -212,6 +352,274 @@ async fn verify(Json(request): Json<VerifyRequest>) -> Result<Json<VerifyRespons
     }))
 }
 
+// ------------------- Math Handlers -------------------
+
+fn handle_legendre(req: LegendreRequest) -> Result<Json<LegendreResponse>, ApiError> {
+    let value = math::legendre_symbol(req.a, req.p)?;
+    Ok(Json(LegendreResponse {
+        a: req.a,
+        p: req.p,
+        value,
+    }))
+}
+
+async fn math_legendre_get(
+    Query(req): Query<LegendreRequest>,
+) -> Result<Json<LegendreResponse>, ApiError> {
+    handle_legendre(req)
+}
+
+async fn math_legendre_post(
+    Json(req): Json<LegendreRequest>,
+) -> Result<Json<LegendreResponse>, ApiError> {
+    handle_legendre(req)
+}
+
+fn handle_sqrtmod(req: SqrtModRequest) -> Result<Json<SqrtModResponse>, ApiError> {
+    let roots = math::sqrt_mod(req.a, req.p)?;
+    Ok(Json(SqrtModResponse {
+        a: req.a,
+        p: req.p,
+        roots,
+    }))
+}
+
+async fn math_sqrtmod_get(
+    Query(req): Query<SqrtModRequest>,
+) -> Result<Json<SqrtModResponse>, ApiError> {
+    handle_sqrtmod(req)
+}
+
+async fn math_sqrtmod_post(
+    Json(req): Json<SqrtModRequest>,
+) -> Result<Json<SqrtModResponse>, ApiError> {
+    handle_sqrtmod(req)
+}
+
+fn parse_crt_args(req: &CrtRequest) -> Result<(Vec<i64>, Vec<i64>), ApiError> {
+    if let (Some(r), Some(m)) = (&req.remainders, &req.moduli) {
+        return Ok((r.clone(), m.clone()));
+    }
+    if let (Some(r_str), Some(m_str)) = (&req.r, &req.m) {
+        let r_vals = r_str
+            .split(',')
+            .map(|s| s.trim().parse::<i64>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "r must be comma-separated integers",
+                )
+            })?;
+        let m_vals = m_str
+            .split(',')
+            .map(|s| s.trim().parse::<i64>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "m must be comma-separated integers",
+                )
+            })?;
+        return Ok((r_vals, m_vals));
+    }
+    Err(ApiError(
+        StatusCode::BAD_REQUEST,
+        "provide remainders and moduli (or r and m)",
+    ))
+}
+
+fn handle_crt(req: CrtRequest) -> Result<Json<CrtResponse>, ApiError> {
+    let (remainders, moduli) = parse_crt_args(&req)?;
+    let (x, modulus) = math::crt_solve(&remainders, &moduli)?;
+    Ok(Json(CrtResponse {
+        remainders,
+        moduli,
+        x,
+        modulus,
+    }))
+}
+
+async fn math_crt_get(Query(req): Query<CrtRequest>) -> Result<Json<CrtResponse>, ApiError> {
+    handle_crt(req)
+}
+
+async fn math_crt_post(Json(req): Json<CrtRequest>) -> Result<Json<CrtResponse>, ApiError> {
+    handle_crt(req)
+}
+
+fn handle_cf(req: CfRequest) -> Result<Json<CfResponse>, ApiError> {
+    let (cf, convergents) = math::continued_fraction(req.num, req.den, req.terms.unwrap_or(100))?;
+    Ok(Json(CfResponse {
+        num: req.num,
+        den: req.den,
+        cf,
+        convergents,
+    }))
+}
+
+async fn math_cf_get(Query(req): Query<CfRequest>) -> Result<Json<CfResponse>, ApiError> {
+    handle_cf(req)
+}
+
+async fn math_cf_post(Json(req): Json<CfRequest>) -> Result<Json<CfResponse>, ApiError> {
+    handle_cf(req)
+}
+
+fn handle_ecadd(req: EcAddRequest) -> Result<Json<EcAddResponse>, ApiError> {
+    let preset = req
+        .curve
+        .as_deref()
+        .map(|name| {
+            math::get_curve_preset(name)
+                .ok_or(ApiError(StatusCode::BAD_REQUEST, "unknown named curve"))
+        })
+        .transpose()?;
+
+    let a = req.a.or_else(|| preset.map(|c| c.a)).unwrap_or(-3);
+    let b = req.b.or_else(|| preset.map(|c| c.b));
+    let p = req
+        .p
+        .or_else(|| preset.map(|c| c.p))
+        .ok_or(ApiError(StatusCode::BAD_REQUEST, "modulus p is required"))?;
+
+    let p1 = match (req.p1, req.x1, req.y1) {
+        (Some([x, y]), _, _) => math::Point { x, y },
+        (_, Some(x), Some(y)) => math::Point { x, y },
+        _ => {
+            if let Some(c) = preset {
+                math::Point { x: c.gx, y: c.gy }
+            } else {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "point 1 (p1 or x1, y1) is required",
+                ));
+            }
+        }
+    };
+
+    let p2 = match (req.p2, req.x2, req.y2) {
+        (Some([x, y]), _, _) => math::Point { x, y },
+        (_, Some(x), Some(y)) => math::Point { x, y },
+        _ => p1,
+    };
+
+    let result_point = math::ec_point_add(Some(p1), Some(p2), a, p)?;
+    let result_arr = result_point.map(|pt| [pt.x, pt.y]);
+    let result_on_curve = match (result_point, b) {
+        (Some(pt), Some(b_val)) => Some(math::is_on_curve(&pt, a, b_val, p)),
+        _ => None,
+    };
+
+    Ok(Json(EcAddResponse {
+        curve: req.curve,
+        p1: [p1.x, p1.y],
+        p2: [p2.x, p2.y],
+        result: result_arr,
+        result_on_curve,
+    }))
+}
+
+async fn math_ecadd_get(Query(req): Query<EcAddRequest>) -> Result<Json<EcAddResponse>, ApiError> {
+    handle_ecadd(req)
+}
+
+async fn math_ecadd_post(Json(req): Json<EcAddRequest>) -> Result<Json<EcAddResponse>, ApiError> {
+    handle_ecadd(req)
+}
+
+fn handle_ecmul(req: EcMulRequest) -> Result<Json<EcMulResponse>, ApiError> {
+    let preset = req
+        .curve
+        .as_deref()
+        .map(|name| {
+            math::get_curve_preset(name)
+                .ok_or(ApiError(StatusCode::BAD_REQUEST, "unknown named curve"))
+        })
+        .transpose()?;
+
+    let a = req.a.or_else(|| preset.map(|c| c.a)).unwrap_or(-3);
+    let b = req.b.or_else(|| preset.map(|c| c.b));
+    let p = req
+        .p
+        .or_else(|| preset.map(|c| c.p))
+        .ok_or(ApiError(StatusCode::BAD_REQUEST, "modulus p is required"))?;
+
+    let pt = match (req.point, req.x, req.y) {
+        (Some([x, y]), _, _) => math::Point { x, y },
+        (_, Some(x), Some(y)) => math::Point { x, y },
+        _ => {
+            if let Some(c) = preset {
+                math::Point { x: c.gx, y: c.gy }
+            } else {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "point (point or x, y) is required",
+                ));
+            }
+        }
+    };
+
+    let result_point = math::ec_mul(req.k, pt, a, p)?;
+    let result_arr = result_point.map(|p_res| [p_res.x, p_res.y]);
+    let result_on_curve = match (result_point, b) {
+        (Some(res_pt), Some(b_val)) => Some(math::is_on_curve(&res_pt, a, b_val, p)),
+        _ => None,
+    };
+
+    Ok(Json(EcMulResponse {
+        curve: req.curve,
+        k: req.k,
+        point: [pt.x, pt.y],
+        result: result_arr,
+        result_on_curve,
+    }))
+}
+
+async fn math_ecmul_get(Query(req): Query<EcMulRequest>) -> Result<Json<EcMulResponse>, ApiError> {
+    handle_ecmul(req)
+}
+
+async fn math_ecmul_post(Json(req): Json<EcMulRequest>) -> Result<Json<EcMulResponse>, ApiError> {
+    handle_ecmul(req)
+}
+
+fn handle_challenge(req: ChallengeRequest) -> Result<Json<ChallengeResponse>, ApiError> {
+    let topic = req.topic.as_deref().unwrap_or("mixed");
+    let count = req.count.unwrap_or(1).clamp(1, 20);
+    let seed = req.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(42)
+    });
+
+    let mut rng = math::SimpleRng::new(seed);
+    let mut problems = Vec::with_capacity(count);
+    for _ in 0..count {
+        problems.push(math::generate_problem(topic, &mut rng)?);
+    }
+
+    Ok(Json(ChallengeResponse {
+        topic: topic.to_string(),
+        seed,
+        count,
+        problems,
+    }))
+}
+
+async fn math_challenge_get(
+    Query(req): Query<ChallengeRequest>,
+) -> Result<Json<ChallengeResponse>, ApiError> {
+    handle_challenge(req)
+}
+
+async fn math_challenge_post(
+    Json(req): Json<ChallengeRequest>,
+) -> Result<Json<ChallengeResponse>, ApiError> {
+    handle_challenge(req)
+}
+
 fn app() -> Router {
     Router::new()
         .route("/health", get(health))
@@ -219,6 +627,22 @@ fn app() -> Router {
         .route("/v1/hash", post(hash))
         .route("/v1/hmac", post(hmac))
         .route("/v1/hmac/verify", post(verify))
+        .route(
+            "/v1/math/legendre",
+            get(math_legendre_get).post(math_legendre_post),
+        )
+        .route(
+            "/v1/math/sqrtmod",
+            get(math_sqrtmod_get).post(math_sqrtmod_post),
+        )
+        .route("/v1/math/crt", get(math_crt_get).post(math_crt_post))
+        .route("/v1/math/cf", get(math_cf_get).post(math_cf_post))
+        .route("/v1/math/ecadd", get(math_ecadd_get).post(math_ecadd_post))
+        .route("/v1/math/ecmul", get(math_ecmul_get).post(math_ecmul_post))
+        .route(
+            "/v1/math/challenge",
+            get(math_challenge_get).post(math_challenge_post),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -307,7 +731,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 5);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 19);
     }
 
     #[tokio::test]
@@ -442,5 +866,148 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn tests_legendre_get_and_post() {
+        // GET
+        let (status, body) = json_response(
+            Request::get("/v1/math/legendre?a=2&p=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["a"], 2);
+        assert_eq!(body["p"], 7);
+        assert_eq!(body["value"], 1);
+
+        // POST
+        let (status, body) = json_response(
+            Request::post("/v1/math/legendre")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":5,"p":17}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["value"], -1);
+    }
+
+    #[tokio::test]
+    async fn tests_sqrtmod_get_and_post() {
+        // GET
+        let (status, body) = json_response(
+            Request::get("/v1/math/sqrtmod?a=10&p=13")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["roots"], serde_json::json!([6, 7]));
+
+        // POST non-residue rejection
+        let (status, body) = json_response(
+            Request::post("/v1/math/sqrtmod")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":5,"p":17}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "a has no square root modulo p");
+    }
+
+    #[tokio::test]
+    async fn tests_crt_get_and_post() {
+        // GET with comma-separated query params
+        let (status, body) = json_response(
+            Request::get("/v1/math/crt?r=2,3,2&m=3,5,7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["x"], 23);
+        assert_eq!(body["modulus"], 105);
+
+        // POST with JSON arrays
+        let (status, body) = json_response(
+            Request::post("/v1/math/crt")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"remainders":[2,3,2],"moduli":[3,5,7]}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["x"], 23);
+        assert_eq!(body["modulus"], 105);
+    }
+
+    #[tokio::test]
+    async fn tests_cf_get_and_post() {
+        let (status, body) = json_response(
+            Request::get("/v1/math/cf?num=355&den=113")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cf"], serde_json::json!([3, 7, 16]));
+        assert_eq!(
+            body["convergents"],
+            serde_json::json!([[3, 1], [22, 7], [355, 113]])
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_ecadd_and_ecmul() {
+        // ecadd on toy193 doubling generator G=(1, 59)
+        let (status, body) = json_response(
+            Request::get("/v1/math/ecadd?curve=toy193")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result_on_curve"], true);
+
+        // ecmul k=7 on toy193 -> (66, 24)
+        let (status, body) = json_response(
+            Request::post("/v1/math/ecmul")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"curve":"toy193","k":7}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"], serde_json::json!([66, 24]));
+        assert_eq!(body["result_on_curve"], true);
+
+        // ecmul k=193 on toy193 -> identity (null)
+        let (status, body) = json_response(
+            Request::post("/v1/math/ecmul")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"curve":"toy193","k":193}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn tests_challenge_endpoint() {
+        let (status, body) = json_response(
+            Request::get("/v1/math/challenge?topic=legendre&seed=42&count=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["topic"], "legendre");
+        assert_eq!(body["seed"], 42);
+        assert_eq!(body["count"], 2);
+        assert_eq!(body["problems"].as_array().unwrap().len(), 2);
     }
 }

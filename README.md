@@ -1,6 +1,6 @@
 # crypto-lab
 
-A small self-hosted Rust service for hashing and HMAC operations. It is designed to run alongside `lab-api` on the same EC2 instance without a database, queue, container, or monitoring stack.
+A small self-hosted Rust service for hashing, HMAC, and number-theoretic cryptography exploration (FoxMath algorithms). It is designed to run alongside `lab-api` on the same EC2 instance without a database, queue, container, or monitoring stack.
 
 ## Architecture
 
@@ -14,21 +14,28 @@ Nginx
    `-- /crypto-api/* -> 127.0.0.1:8089 -> crypto-lab
 ```
 
-The Rust service binds to `127.0.0.1:8089`. Nginx should terminate HTTPS, apply Basic Auth to crypto operations, and proxy the public `/crypto-api/` prefix to the local service.
+The Rust service binds to `127.0.0.1:8089`. Nginx terminates HTTPS, optionally applies Basic Auth, and proxies the public `/crypto-api/` prefix to the local service.
 
-All operation requests must use `Content-Type: application/json`. Text fields are interpreted as UTF-8, and cryptographic operations operate on their UTF-8 byte representation. Binary input and base64 encoding are intentionally outside the v0.1.0 contract.
+JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoints support both `GET` (query parameters) for instant browser/CLI exploration and `POST` (JSON bodies) for programmatic pipelines.
 
 ## API
 
 | Method | Route | Auth | Purpose |
 | --- | --- | --- | --- |
 | GET | `/health` | No | Service health |
-| GET | `/v1/info` | No | Non-sensitive application metadata and endpoint discovery |
+| GET | `/v1/info` | No | Application metadata and endpoint discovery |
 | POST | `/v1/hash` | Basic Auth at Nginx | SHA-256 or SHA-512 digest |
 | POST | `/v1/hmac` | Basic Auth at Nginx | HMAC generation |
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
+| GET / POST | `/v1/math/legendre` | Configurable | Legendre symbol $(a/p)$ via Euler's criterion |
+| GET / POST | `/v1/math/sqrtmod` | Configurable | Modular square roots via Tonelli-Shanks |
+| GET / POST | `/v1/math/crt` | Configurable | Chinese Remainder Theorem solver (Extended GCD) |
+| GET / POST | `/v1/math/cf` | Configurable | Continued fraction expansion & convergents |
+| GET / POST | `/v1/math/ecadd` | Configurable | Elliptic curve point addition over $\mathbb{F}_p$ |
+| GET / POST | `/v1/math/ecmul` | Configurable | Elliptic curve scalar multiplication $k \cdot P$ |
+| GET / POST | `/v1/math/challenge` | Configurable | Seeded, reproducible math & crypto challenges |
 
-The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/hash`.
+The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
 ### Application information
 
@@ -50,7 +57,21 @@ Response:
     "GET /v1/info",
     "POST /v1/hash",
     "POST /v1/hmac",
-    "POST /v1/hmac/verify"
+    "POST /v1/hmac/verify",
+    "GET /v1/math/legendre",
+    "POST /v1/math/legendre",
+    "GET /v1/math/sqrtmod",
+    "POST /v1/math/sqrtmod",
+    "GET /v1/math/crt",
+    "POST /v1/math/crt",
+    "GET /v1/math/cf",
+    "POST /v1/math/cf",
+    "GET /v1/math/ecadd",
+    "POST /v1/math/ecadd",
+    "GET /v1/math/ecmul",
+    "POST /v1/math/ecmul",
+    "GET /v1/math/challenge",
+    "POST /v1/math/challenge"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -126,6 +147,119 @@ Response:
 
 Verification compares the decoded MAC using a constant-time equality operation. An invalid hexadecimal MAC is a `400 Bad Request`; a well-formed but incorrect MAC returns `200 OK` with `"valid": false`.
 
+### Math & Number Theory (FoxMath Core)
+
+All math endpoints accept either query parameters (`GET`) or a JSON payload (`POST`).
+
+#### 1. Legendre Symbol (`/v1/math/legendre`)
+Computes $(a/p)$ via Euler's criterion. Returns `1` (quadratic residue), `-1` (non-residue), or `0` ($a \equiv 0 \pmod p$).
+
+```bash
+# GET via query parameters
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/legendre?a=10&p=13"
+# {"a":10,"p":13,"value":1}
+
+# POST via JSON
+curl -sS -H "content-type: application/json" \
+  -d '{"a": 5, "p": 17}' \
+  https://abhrankan.duckdns.org/crypto-api/v1/math/legendre
+# {"a":5,"p":17,"value":-1}
+```
+
+#### 2. Modular Square Roots (`/v1/math/sqrtmod`)
+Finds square roots modulo an odd prime $p$ via the Tonelli-Shanks algorithm ($O(\log p)$ fast path for $p \equiv 3 \pmod 4$).
+
+```bash
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13"
+```
+```json
+{
+  "a": 10,
+  "p": 13,
+  "roots": [6, 7]
+}
+```
+
+#### 3. Chinese Remainder Theorem (`/v1/math/crt`)
+Solves simultaneous congruences $x \equiv r_i \pmod{m_i}$ using Extended Euclidean GCD.
+
+```bash
+# Query params: r=2,3,2 & m=3,5,7
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/crt?r=2,3,2&m=3,5,7"
+
+# JSON request:
+curl -sS -H "content-type: application/json" \
+  -d '{"remainders": [2, 3, 2], "moduli": [3, 5, 7]}' \
+  https://abhrankan.duckdns.org/crypto-api/v1/math/crt
+```
+```json
+{
+  "remainders": [2, 3, 2],
+  "moduli": [3, 5, 7],
+  "x": 23,
+  "modulus": 105
+}
+```
+
+#### 4. Continued Fraction Expansion (`/v1/math/cf`)
+Expands rational fraction $num/den$ into simple continued fraction terms and computes intermediate convergents.
+
+```bash
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/cf?num=355&den=113"
+```
+```json
+{
+  "num": 355,
+  "den": 113,
+  "cf": [3, 7, 16],
+  "convergents": [
+    [3, 1],
+    [22, 7],
+    [355, 113]
+  ]
+}
+```
+
+#### 5. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
+Performs group operations over $\mathbb{F}_p$ for Weierstrass curves $y^2 \equiv x^3 + ax + b \pmod p$. Built-in presets: `toy97` and `toy193`. Returns `null` if the result is the point at infinity (identity).
+
+```bash
+# Scalar multiplication k·G on toy193
+curl -sS -H "content-type: application/json" \
+  -d '{"curve": "toy193", "k": 7}' \
+  https://abhrankan.duckdns.org/crypto-api/v1/math/ecmul
+```
+```json
+{
+  "curve": "toy193",
+  "k": 7,
+  "point": [1, 59],
+  "result": [66, 24],
+  "result_on_curve": true
+}
+```
+
+#### 6. Challenge Generator (`/v1/math/challenge`)
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `crt`, `ecdlp`, and `mixed`.
+
+```bash
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"
+```
+```json
+{
+  "topic": "legendre",
+  "seed": 42,
+  "count": 1,
+  "problems": [
+    {
+      "topic": "legendre",
+      "question": "Legendre symbol (10/13)",
+      "answer": 1
+    }
+  ]
+}
+```
+
 ## Limits and status codes
 
 - Request bodies are limited to 64 KiB.
@@ -166,6 +300,11 @@ location = /crypto-api/v1/info {
     proxy_pass http://127.0.0.1:8089/v1/info;
 }
 
+# Optional: expose math endpoints publicly for web playgrounds / exploration
+location /crypto-api/v1/math/ {
+    proxy_pass http://127.0.0.1:8089/v1/math/;
+}
+
 location /crypto-api/ {
     auth_basic "crypto-lab";
     auth_basic_user_file /etc/nginx/.htpasswd;
@@ -173,7 +312,7 @@ location /crypto-api/ {
 }
 ```
 
-The exact health and info matches keep `/crypto-api/health` and `/crypto-api/v1/info` unauthenticated. The trailing slash on the authenticated location preserves the backend route shape: `/crypto-api/v1/hash` becomes `/v1/hash`.
+The exact health and info matches keep `/crypto-api/health` and `/crypto-api/v1/info` unauthenticated (as well as `/crypto-api/v1/math/` if exposed publicly). The trailing slash on the authenticated location preserves the backend route shape: `/crypto-api/v1/hash` becomes `/v1/hash`.
 
 ## systemd
 
