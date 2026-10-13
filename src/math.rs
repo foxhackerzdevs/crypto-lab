@@ -755,10 +755,16 @@ mod tests {
                 PrimeFactor { prime: 5, power: 1 },
             ]
         );
-        assert_eq!(format_factorization(&factorize(360).unwrap()), "2^3 * 3^2 * 5");
+        assert_eq!(
+            format_factorization(&factorize(360).unwrap()),
+            "2^3 * 3^2 * 5"
+        );
         assert_eq!(
             factorize(104729).unwrap(),
-            vec![PrimeFactor { prime: 104729, power: 1 }]
+            vec![PrimeFactor {
+                prime: 104729,
+                power: 1
+            }]
         );
         assert!(factorize(0).is_err());
         assert!(factorize(-10).is_err());
@@ -766,8 +772,14 @@ mod tests {
         assert_eq!(
             factorize(1000036000099).unwrap(),
             vec![
-                PrimeFactor { prime: 1000003, power: 1 },
-                PrimeFactor { prime: 1000033, power: 1 },
+                PrimeFactor {
+                    prime: 1000003,
+                    power: 1
+                },
+                PrimeFactor {
+                    prime: 1000033,
+                    power: 1
+                },
             ]
         );
     }
