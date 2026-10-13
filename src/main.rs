@@ -16,7 +16,7 @@ use subtle::ConstantTimeEq;
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 32 * 1024;
 
-const ENDPOINTS: [&str; 19] = [
+const ENDPOINTS: [&str; 21] = [
     "GET /health",
     "GET /v1/info",
     "POST /v1/hash",
@@ -26,6 +26,8 @@ const ENDPOINTS: [&str; 19] = [
     "POST /v1/math/legendre",
     "GET /v1/math/sqrtmod",
     "POST /v1/math/sqrtmod",
+    "GET /v1/math/factor",
+    "POST /v1/math/factor",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -49,7 +51,7 @@ struct Info {
     service: &'static str,
     api: &'static str,
     version: &'static str,
-    endpoints: [&'static str; 19],
+    endpoints: [&'static str; 21],
     build_profile: &'static str,
     environment: &'static str,
 }
@@ -139,6 +141,20 @@ struct SqrtModResponse {
     a: i64,
     p: i64,
     roots: Vec<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct FactorRequest {
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct FactorResponse {
+    n: i64,
+    factors: Vec<math::PrimeFactor>,
+    prime_factors: Vec<i64>,
+    expression: String,
+    is_prime: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -396,6 +412,32 @@ async fn math_sqrtmod_post(
     handle_sqrtmod(req)
 }
 
+fn handle_factor(req: FactorRequest) -> Result<Json<FactorResponse>, ApiError> {
+    let factors = math::factorize(req.n)?;
+    let is_prime = math::is_prime(req.n);
+    let expression = math::format_factorization(&factors);
+    let prime_factors = factors.iter().map(|f| f.prime).collect();
+    Ok(Json(FactorResponse {
+        n: req.n,
+        factors,
+        prime_factors,
+        expression,
+        is_prime,
+    }))
+}
+
+async fn math_factor_get(
+    Query(req): Query<FactorRequest>,
+) -> Result<Json<FactorResponse>, ApiError> {
+    handle_factor(req)
+}
+
+async fn math_factor_post(
+    Json(req): Json<FactorRequest>,
+) -> Result<Json<FactorResponse>, ApiError> {
+    handle_factor(req)
+}
+
 fn parse_crt_args(req: &CrtRequest) -> Result<(Vec<i64>, Vec<i64>), ApiError> {
     if let (Some(r), Some(m)) = (&req.remainders, &req.moduli) {
         return Ok((r.clone(), m.clone()));
@@ -635,6 +677,10 @@ fn app() -> Router {
             "/v1/math/sqrtmod",
             get(math_sqrtmod_get).post(math_sqrtmod_post),
         )
+        .route(
+            "/v1/math/factor",
+            get(math_factor_get).post(math_factor_post),
+        )
         .route("/v1/math/crt", get(math_crt_get).post(math_crt_post))
         .route("/v1/math/cf", get(math_cf_get).post(math_cf_post))
         .route("/v1/math/ecadd", get(math_ecadd_get).post(math_ecadd_post))
@@ -731,7 +777,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 19);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 21);
     }
 
     #[tokio::test]
@@ -916,6 +962,53 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "a has no square root modulo p");
+    }
+
+    #[tokio::test]
+    async fn tests_factor_get_and_post() {
+        // GET composite
+        let (status, body) = json_response(
+            Request::get("/v1/math/factor?n=360")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 360);
+        assert_eq!(body["expression"], "2^3 * 3^2 * 5");
+        assert_eq!(body["is_prime"], false);
+        assert_eq!(body["prime_factors"], serde_json::json!([2, 3, 5]));
+        assert_eq!(
+            body["factors"],
+            serde_json::json!([
+                {"prime": 2, "power": 3},
+                {"prime": 3, "power": 2},
+                {"prime": 5, "power": 1}
+            ])
+        );
+
+        // POST prime
+        let (status, body) = json_response(
+            Request::post("/v1/math/factor")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":104729}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 104729);
+        assert_eq!(body["is_prime"], true);
+        assert_eq!(body["expression"], "104729");
+
+        // Invalid input
+        let (status, body) = json_response(
+            Request::get("/v1/math/factor?n=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "n must be a positive integer >= 1");
     }
 
     #[tokio::test]

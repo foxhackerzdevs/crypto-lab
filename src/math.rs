@@ -371,6 +371,187 @@ pub fn ec_mul(mut k: i64, pt: Point, a: i64, p: i64) -> Result<Option<Point>, Ma
     Ok(result)
 }
 
+// ------------------- Integer Factorization & Primality -------------------
+
+pub fn is_prime(n: i64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 || n == 3 || n == 5 || n == 7 {
+        return true;
+    }
+    if n % 2 == 0 || n % 3 == 0 || n % 5 == 0 {
+        return false;
+    }
+    let bases = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+    let mut d = (n - 1) as i128;
+    let mut s = 0;
+    while d % 2 == 0 {
+        d /= 2;
+        s += 1;
+    }
+
+    let n128 = n as i128;
+    'outer: for &a in &bases {
+        if a >= n {
+            break;
+        }
+        let mut x = mod_pow(a as i128, d, n128);
+        if x == 1 || x == n128 - 1 {
+            continue;
+        }
+        for _ in 0..s - 1 {
+            x = (x * x).rem_euclid(n128);
+            if x == n128 - 1 {
+                continue 'outer;
+            }
+        }
+        return false;
+    }
+    true
+}
+
+fn pollard_brent(n: i64, rng: &mut SimpleRng) -> i64 {
+    if n % 2 == 0 {
+        return 2;
+    }
+    if is_prime(n) {
+        return n;
+    }
+
+    let n128 = n as i128;
+    loop {
+        let mut y = rng.gen_range(1, n - 1) as i128;
+        let c = rng.gen_range(1, n - 1) as i128;
+        let m = 128;
+        let mut g = 1i128;
+        let mut r = 1usize;
+        let mut q = 1i128;
+        let mut ys = y;
+        let mut x = y;
+
+        while g == 1 {
+            x = y;
+            for _ in 0..r {
+                y = (y * y + c).rem_euclid(n128);
+            }
+            let mut k = 0usize;
+            while k < r && g == 1 {
+                ys = y;
+                let limit = m.min(r - k);
+                for _ in 0..limit {
+                    y = (y * y + c).rem_euclid(n128);
+                    q = (q * (x - y).abs()).rem_euclid(n128);
+                }
+                let (gcd_val, _, _) = egcd(q, n128);
+                g = gcd_val;
+                k += limit;
+            }
+            r *= 2;
+        }
+
+        if g == n128 {
+            g = 1;
+            while g == 1 {
+                ys = (ys * ys + c).rem_euclid(n128);
+                let (gcd_val, _, _) = egcd((x - ys).abs(), n128);
+                g = gcd_val;
+            }
+            if g == n128 {
+                continue;
+            }
+        }
+        return g as i64;
+    }
+}
+
+fn factor_recursive(n: i64, rng: &mut SimpleRng, factors: &mut Vec<i64>) {
+    if n <= 1 {
+        return;
+    }
+    if is_prime(n) {
+        factors.push(n);
+        return;
+    }
+    let d = pollard_brent(n, rng);
+    factor_recursive(d, rng, factors);
+    factor_recursive(n / d, rng, factors);
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrimeFactor {
+    pub prime: i64,
+    pub power: u32,
+}
+
+pub fn factorize(mut n: i64) -> Result<Vec<PrimeFactor>, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(Vec::new());
+    }
+
+    let mut factors = Vec::new();
+    let small_primes = [
+        2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89,
+        97,
+    ];
+
+    for &p in &small_primes {
+        while n % p == 0 {
+            factors.push(p);
+            n /= p;
+        }
+        if n == 1 {
+            break;
+        }
+    }
+
+    if n > 1 {
+        if is_prime(n) {
+            factors.push(n);
+        } else {
+            let mut rng = SimpleRng::new((n as u64) ^ 0x5DEECE66D);
+            factor_recursive(n, &mut rng, &mut factors);
+        }
+    }
+
+    factors.sort_unstable();
+    let mut grouped: Vec<PrimeFactor> = Vec::new();
+    for f in factors {
+        if let Some(last) = grouped.last_mut() {
+            if last.prime == f {
+                last.power += 1;
+                continue;
+            }
+        }
+        grouped.push(PrimeFactor { prime: f, power: 1 });
+    }
+
+    Ok(grouped)
+}
+
+pub fn format_factorization(factors: &[PrimeFactor]) -> String {
+    if factors.is_empty() {
+        return "1".to_string();
+    }
+    factors
+        .iter()
+        .map(|f| {
+            if f.power == 1 {
+                format!("{}", f.prime)
+            } else {
+                format!("{}^{}", f.prime, f.power)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" * ")
+}
+
 // ------------------- Challenge / Quiz Generator -------------------
 
 #[derive(Clone, Debug)]
@@ -415,7 +596,7 @@ pub struct ChallengeProblem {
 
 pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengeProblem, MathError> {
     let selected_topic = if topic == "mixed" {
-        let choices = ["legendre", "sqrtmod", "crt", "ecdlp"];
+        let choices = ["legendre", "sqrtmod", "crt", "ecdlp", "factor"];
         *rng.choose(&choices)
     } else {
         topic
@@ -475,9 +656,24 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: k,
             })
         }
+        "factor" => {
+            let primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
+            let count = *rng.choose(&[2, 2, 2, 3]);
+            let mut chosen = Vec::with_capacity(count);
+            for _ in 0..count {
+                chosen.push(*rng.choose(&primes));
+            }
+            let n: i64 = chosen.iter().product();
+            let min_p = *chosen.iter().min().unwrap();
+            Ok(ChallengeProblem {
+                topic: "factor".to_string(),
+                question: f!("Find the smallest prime factor of {n}"),
+                answer: min_p,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, sqrtmod, crt, ecdlp, or mixed",
+            "topic must be legendre, sqrtmod, crt, ecdlp, factor, or mixed",
         )),
     }
 }
@@ -549,6 +745,46 @@ mod tests {
     }
 
     #[test]
+    fn test_factorize() {
+        assert_eq!(factorize(1).unwrap(), vec![]);
+        assert_eq!(
+            factorize(360).unwrap(),
+            vec![
+                PrimeFactor { prime: 2, power: 3 },
+                PrimeFactor { prime: 3, power: 2 },
+                PrimeFactor { prime: 5, power: 1 },
+            ]
+        );
+        assert_eq!(format_factorization(&factorize(360).unwrap()), "2^3 * 3^2 * 5");
+        assert_eq!(
+            factorize(104729).unwrap(),
+            vec![PrimeFactor { prime: 104729, power: 1 }]
+        );
+        assert!(factorize(0).is_err());
+        assert!(factorize(-10).is_err());
+        // Large semiprime (1000003 * 1000033 = 1000036000099)
+        assert_eq!(
+            factorize(1000036000099).unwrap(),
+            vec![
+                PrimeFactor { prime: 1000003, power: 1 },
+                PrimeFactor { prime: 1000033, power: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_is_prime() {
+        assert!(!is_prime(0));
+        assert!(!is_prime(1));
+        assert!(is_prime(2));
+        assert!(is_prime(3));
+        assert!(!is_prime(4));
+        assert!(is_prime(13));
+        assert!(!is_prime(561)); // Carmichael number
+        assert!(is_prime(104729));
+    }
+
+    #[test]
     fn test_challenge_deterministic() {
         let mut rng1 = SimpleRng::new(42);
         let mut rng2 = SimpleRng::new(42);
@@ -558,5 +794,8 @@ mod tests {
 
         assert_eq!(p1.question, p2.question);
         assert_eq!(p1.answer, p2.answer);
+
+        let f1 = generate_problem("factor", &mut rng1).unwrap();
+        assert_eq!(f1.topic, "factor");
     }
 }

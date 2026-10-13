@@ -29,6 +29,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
 | GET / POST | `/v1/math/legendre` | Configurable (Public or Basic Auth) | Legendre symbol $(a/p)$ via Euler's criterion |
 | GET / POST | `/v1/math/sqrtmod` | Configurable (Public or Basic Auth) | Modular square roots via Tonelli-Shanks |
+| GET / POST | `/v1/math/factor` | Configurable (Public or Basic Auth) | Prime factorization via Pollard's rho & trial division |
 | GET / POST | `/v1/math/crt` | Configurable (Public or Basic Auth) | Chinese Remainder Theorem solver (Extended GCD) |
 | GET / POST | `/v1/math/cf` | Configurable (Public or Basic Auth) | Continued fraction expansion & convergents |
 | GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
@@ -51,7 +52,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -62,6 +63,8 @@ Response:
     "POST /v1/math/legendre",
     "GET /v1/math/sqrtmod",
     "POST /v1/math/sqrtmod",
+    "GET /v1/math/factor",
+    "POST /v1/math/factor",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -180,7 +183,33 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13"
 }
 ```
 
-#### 3. Chinese Remainder Theorem (`/v1/math/crt`)
+#### 3. Prime Factorization (`/v1/math/factor`)
+Decomposes an integer $n \ge 1$ into sorted prime powers using trial division and Pollard's $\rho$ (Brent's variant) with deterministic Miller-Rabin primality verification.
+
+```bash
+# GET via query parameters
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/factor?n=360"
+
+# POST via JSON
+curl -sS -H "content-type: application/json" \
+  -d '{"n": 360}' \
+  https://abhrankan.duckdns.org/crypto-api/v1/math/factor
+```
+```json
+{
+  "n": 360,
+  "factors": [
+    {"prime": 2, "power": 3},
+    {"prime": 3, "power": 2},
+    {"prime": 5, "power": 1}
+  ],
+  "prime_factors": [2, 3, 5],
+  "expression": "2^3 * 3^2 * 5",
+  "is_prime": false
+}
+```
+
+#### 4. Chinese Remainder Theorem (`/v1/math/crt`)
 Solves simultaneous congruences $x \equiv r_i \pmod{m_i}$ using Extended Euclidean GCD.
 
 ```bash
@@ -201,7 +230,7 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 4. Continued Fraction Expansion (`/v1/math/cf`)
+#### 5. Continued Fraction Expansion (`/v1/math/cf`)
 Expands rational fraction $num/den$ into simple continued fraction terms and computes intermediate convergents.
 
 ```bash
@@ -220,7 +249,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/cf?num=355&den=113"
 }
 ```
 
-#### 5. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
+#### 6. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
 Performs group operations over $\mathbb{F}_p$ for Weierstrass curves $y^2 \equiv x^3 + ax + b \pmod p$. Built-in presets: `toy97` and `toy193`. Returns `null` if the result is the point at infinity (identity).
 
 ```bash
@@ -239,8 +268,8 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 6. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `crt`, `ecdlp`, and `mixed`.
+#### 7. Challenge Generator (`/v1/math/challenge`)
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `factor`, `crt`, `ecdlp`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"
