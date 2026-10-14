@@ -31,7 +31,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/sqrtmod` | Configurable (Public or Basic Auth) | Modular square roots via Tonelli-Shanks |
 | GET / POST | `/v1/math/factor` | Configurable (Public or Basic Auth) | Prime factorization via Pollard's rho & trial division |
 | GET / POST | `/v1/math/totient` | Configurable (Public or Basic Auth) | Euler's totient $\phi(n)$ and Carmichael $\lambda(n)$ |
-| GET / POST | `/v1/math/order` | Configurable (Public or Basic Auth) | Multiplicative order $\operatorname{ord}_m(a)$ and primitive root test |
+| GET / POST | `/v1/math/order` | Configurable (Public or Basic Auth) | Multiplicative order $\mathrm{ord}_m(a)$ and primitive root test |
 | GET / POST | `/v1/math/crt` | Configurable (Public or Basic Auth) | Chinese Remainder Theorem solver (Extended GCD) |
 | GET / POST | `/v1/math/cf` | Configurable (Public or Basic Auth) | Continued fraction expansion & convergents |
 | GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
@@ -231,7 +231,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/totient?n=360"
 ```
 
 #### 5. Multiplicative Order & Primitive Roots (`/v1/math/order`)
-Computes the exact multiplicative order $\operatorname{ord}_m(a)$ — the smallest $k \ge 1$ such that $a^k \equiv 1 \pmod m$ via prime-factor reduction over $\lambda(m)$. Automatically determines if $a$ is a primitive root modulo $m$.
+Computes the exact multiplicative order $\mathrm{ord}_m(a)$ — the smallest $k \ge 1$ such that $a^k \equiv 1 \pmod m$ via prime-factor reduction over $\lambda(m)$. Automatically determines if $a$ is a primitive root modulo $m$.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/order?a=3&m=7"
