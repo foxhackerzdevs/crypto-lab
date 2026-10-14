@@ -552,6 +552,128 @@ pub fn format_factorization(factors: &[PrimeFactor]) -> String {
         .join(" * ")
 }
 
+pub fn euler_phi(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    let mut result = 1i64;
+    for f in factors {
+        let mut p_pow = 1i64;
+        for _ in 0..(f.power - 1) {
+            p_pow = p_pow
+                .checked_mul(f.prime)
+                .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+        }
+        let term = p_pow
+            .checked_mul(f.prime - 1)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+        result = result
+            .checked_mul(term)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+    }
+    Ok(result)
+}
+
+pub fn carmichael_lambda(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    let mut lam = 1i64;
+    for f in factors {
+        let pk_lam = if f.prime == 2 {
+            if f.power == 1 {
+                1i64
+            } else if f.power == 2 {
+                2i64
+            } else {
+                1i64.checked_shl(f.power - 2)
+                    .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?
+            }
+        } else {
+            let mut p_pow = 1i64;
+            for _ in 0..(f.power - 1) {
+                p_pow = p_pow
+                    .checked_mul(f.prime)
+                    .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+            }
+            p_pow
+                .checked_mul(f.prime - 1)
+                .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?
+        };
+        let (g, _, _) = egcd(lam as i128, pk_lam as i128);
+        let g = g as i64;
+        lam = (lam / g)
+            .checked_mul(pk_lam)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+    }
+    Ok(lam)
+}
+
+#[allow(dead_code)]
+pub fn is_cyclic(n: i64) -> Result<bool, MathError> {
+    let phi = euler_phi(n)?;
+    let lam = carmichael_lambda(n)?;
+    Ok(phi == lam)
+}
+
+pub fn multiplicative_order(a: i64, m: i64) -> Result<i64, MathError> {
+    if m <= 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus m must be greater than 1",
+        ));
+    }
+    let a_mod = a.rem_euclid(m);
+    let (g, _, _) = egcd(a_mod as i128, m as i128);
+    if g != 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "a and m are not coprime",
+        ));
+    }
+    if a_mod == 1 {
+        return Ok(1);
+    }
+    let lam = carmichael_lambda(m)?;
+    let mut order = lam;
+    let factors = factorize(lam)?;
+    for f in factors {
+        let p = f.prime;
+        while order % p == 0 && mod_pow(a_mod as i128, (order / p) as i128, m as i128) == 1 {
+            order /= p;
+        }
+    }
+    Ok(order)
+}
+
+pub fn is_primitive_root(a: i64, m: i64) -> Result<bool, MathError> {
+    if m <= 1 {
+        return Ok(false);
+    }
+    let a_mod = a.rem_euclid(m);
+    let (g, _, _) = egcd(a_mod as i128, m as i128);
+    if g != 1 {
+        return Ok(false);
+    }
+    let order = multiplicative_order(a, m)?;
+    let phi = euler_phi(m)?;
+    Ok(order == phi)
+}
+
 // ------------------- Challenge / Quiz Generator -------------------
 
 #[derive(Clone, Debug)]
@@ -596,7 +718,7 @@ pub struct ChallengeProblem {
 
 pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengeProblem, MathError> {
     let selected_topic = if topic == "mixed" {
-        let choices = ["legendre", "sqrtmod", "crt", "ecdlp", "factor"];
+        let choices = ["legendre", "sqrtmod", "crt", "ecdlp", "factor", "totient"];
         *rng.choose(&choices)
     } else {
         topic
@@ -671,9 +793,22 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: min_p,
             })
         }
+        "totient" => {
+            let nums = [
+                6, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 22, 24, 25, 26, 27, 28, 30, 35, 36, 40,
+                42, 45, 49, 50, 54, 60, 72, 84, 100,
+            ];
+            let n = *rng.choose(&nums);
+            let ans = euler_phi(n)?;
+            Ok(ChallengeProblem {
+                topic: "totient".to_string(),
+                question: f!("Compute Euler's totient phi({n})"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, sqrtmod, crt, ecdlp, factor, or mixed",
+            "topic must be legendre, sqrtmod, crt, ecdlp, factor, totient, or mixed",
         )),
     }
 }
@@ -809,5 +944,46 @@ mod tests {
 
         let f1 = generate_problem("factor", &mut rng1).unwrap();
         assert_eq!(f1.topic, "factor");
+
+        let t1 = generate_problem("totient", &mut rng1).unwrap();
+        assert_eq!(t1.topic, "totient");
+    }
+
+    #[test]
+    fn test_totient_and_order() {
+        assert_eq!(euler_phi(1).unwrap(), 1);
+        assert_eq!(euler_phi(2).unwrap(), 1);
+        assert_eq!(euler_phi(7).unwrap(), 6);
+        assert_eq!(euler_phi(360).unwrap(), 96);
+        assert!(euler_phi(0).is_err());
+        assert!(euler_phi(-10).is_err());
+
+        assert_eq!(carmichael_lambda(1).unwrap(), 1);
+        assert_eq!(carmichael_lambda(2).unwrap(), 1);
+        assert_eq!(carmichael_lambda(4).unwrap(), 2);
+        assert_eq!(carmichael_lambda(8).unwrap(), 2);
+        assert_eq!(carmichael_lambda(16).unwrap(), 4);
+        assert_eq!(carmichael_lambda(7).unwrap(), 6);
+        assert_eq!(carmichael_lambda(360).unwrap(), 12);
+        assert!(carmichael_lambda(0).is_err());
+
+        assert!(is_cyclic(1).unwrap());
+        assert!(is_cyclic(2).unwrap());
+        assert!(is_cyclic(4).unwrap());
+        assert!(is_cyclic(7).unwrap());
+        assert!(!is_cyclic(8).unwrap());
+        assert!(!is_cyclic(360).unwrap());
+
+        assert_eq!(multiplicative_order(3, 7).unwrap(), 6);
+        assert_eq!(multiplicative_order(2, 7).unwrap(), 3);
+        assert_eq!(multiplicative_order(1, 7).unwrap(), 1);
+        assert!(multiplicative_order(0, 7).is_err());
+        assert!(multiplicative_order(14, 7).is_err());
+        assert!(multiplicative_order(2, 1).is_err());
+
+        assert!(is_primitive_root(3, 7).unwrap());
+        assert!(!is_primitive_root(2, 7).unwrap());
+        assert!(!is_primitive_root(1, 7).unwrap());
+        assert!(!is_primitive_root(3, 8).unwrap());
     }
 }

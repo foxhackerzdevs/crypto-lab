@@ -30,6 +30,8 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/legendre` | Configurable (Public or Basic Auth) | Legendre symbol $(a/p)$ via Euler's criterion |
 | GET / POST | `/v1/math/sqrtmod` | Configurable (Public or Basic Auth) | Modular square roots via Tonelli-Shanks |
 | GET / POST | `/v1/math/factor` | Configurable (Public or Basic Auth) | Prime factorization via Pollard's rho & trial division |
+| GET / POST | `/v1/math/totient` | Configurable (Public or Basic Auth) | Euler's totient $\phi(n)$ and Carmichael $\lambda(n)$ |
+| GET / POST | `/v1/math/order` | Configurable (Public or Basic Auth) | Multiplicative order $\operatorname{ord}_m(a)$ and primitive root test |
 | GET / POST | `/v1/math/crt` | Configurable (Public or Basic Auth) | Chinese Remainder Theorem solver (Extended GCD) |
 | GET / POST | `/v1/math/cf` | Configurable (Public or Basic Auth) | Continued fraction expansion & convergents |
 | GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
@@ -52,7 +54,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -65,6 +67,10 @@ Response:
     "POST /v1/math/sqrtmod",
     "GET /v1/math/factor",
     "POST /v1/math/factor",
+    "GET /v1/math/totient",
+    "POST /v1/math/totient",
+    "GET /v1/math/order",
+    "POST /v1/math/order",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -209,7 +215,37 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 4. Chinese Remainder Theorem (`/v1/math/crt`)
+#### 4. Euler's Totient & Carmichael Function (`/v1/math/totient`)
+Computes Euler's totient $\phi(n)$ (number of coprime residues $\le n$) and Carmichael's universal exponent $\lambda(n)$, and verifies whether $(\mathbb{Z}/n\mathbb{Z})^\times$ is cyclic.
+
+```bash
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/totient?n=360"
+```
+```json
+{
+  "n": 360,
+  "phi": 96,
+  "lambda": 12,
+  "is_cyclic": false
+}
+```
+
+#### 5. Multiplicative Order & Primitive Roots (`/v1/math/order`)
+Computes the exact multiplicative order $\operatorname{ord}_m(a)$ — the smallest $k \ge 1$ such that $a^k \equiv 1 \pmod m$ via prime-factor reduction over $\lambda(m)$. Automatically determines if $a$ is a primitive root modulo $m$.
+
+```bash
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/order?a=3&m=7"
+```
+```json
+{
+  "a": 3,
+  "m": 7,
+  "order": 6,
+  "is_primitive_root": true
+}
+```
+
+#### 6. Chinese Remainder Theorem (`/v1/math/crt`)
 Solves simultaneous congruences $x \equiv r_i \pmod{m_i}$ using Extended Euclidean GCD.
 
 ```bash
@@ -230,7 +266,7 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 5. Continued Fraction Expansion (`/v1/math/cf`)
+#### 7. Continued Fraction Expansion (`/v1/math/cf`)
 Expands rational fraction $num/den$ into simple continued fraction terms and computes intermediate convergents.
 
 ```bash
@@ -249,7 +285,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/cf?num=355&den=113"
 }
 ```
 
-#### 6. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
+#### 8. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
 Performs group operations over $\mathbb{F}_p$ for Weierstrass curves $y^2 \equiv x^3 + ax + b \pmod p$. Built-in presets: `toy97` and `toy193`. Returns `null` if the result is the point at infinity (identity).
 
 ```bash
@@ -268,8 +304,8 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 7. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `factor`, `crt`, `ecdlp`, and `mixed`.
+#### 9. Challenge Generator (`/v1/math/challenge`)
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `factor`, `totient`, `crt`, `ecdlp`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"

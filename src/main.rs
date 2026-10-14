@@ -16,7 +16,7 @@ use subtle::ConstantTimeEq;
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 32 * 1024;
 
-const ENDPOINTS: [&str; 21] = [
+const ENDPOINTS: [&str; 25] = [
     "GET /health",
     "GET /v1/info",
     "POST /v1/hash",
@@ -28,6 +28,10 @@ const ENDPOINTS: [&str; 21] = [
     "POST /v1/math/sqrtmod",
     "GET /v1/math/factor",
     "POST /v1/math/factor",
+    "GET /v1/math/totient",
+    "POST /v1/math/totient",
+    "GET /v1/math/order",
+    "POST /v1/math/order",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -51,7 +55,7 @@ struct Info {
     service: &'static str,
     api: &'static str,
     version: &'static str,
-    endpoints: [&'static str; 21],
+    endpoints: [&'static str; 25],
     build_profile: &'static str,
     environment: &'static str,
 }
@@ -155,6 +159,33 @@ struct FactorResponse {
     prime_factors: Vec<i64>,
     expression: String,
     is_prime: bool,
+}
+
+#[derive(Deserialize, Clone)]
+struct TotientRequest {
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct TotientResponse {
+    n: i64,
+    phi: i64,
+    lambda: i64,
+    is_cyclic: bool,
+}
+
+#[derive(Deserialize, Clone)]
+struct OrderRequest {
+    a: i64,
+    m: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct OrderResponse {
+    a: i64,
+    m: i64,
+    order: i64,
+    is_primitive_root: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -438,6 +469,49 @@ async fn math_factor_post(
     handle_factor(req)
 }
 
+fn handle_totient(req: TotientRequest) -> Result<Json<TotientResponse>, ApiError> {
+    let phi = math::euler_phi(req.n)?;
+    let lambda = math::carmichael_lambda(req.n)?;
+    let is_cyclic = phi == lambda;
+    Ok(Json(TotientResponse {
+        n: req.n,
+        phi,
+        lambda,
+        is_cyclic,
+    }))
+}
+
+async fn math_totient_get(
+    Query(req): Query<TotientRequest>,
+) -> Result<Json<TotientResponse>, ApiError> {
+    handle_totient(req)
+}
+
+async fn math_totient_post(
+    Json(req): Json<TotientRequest>,
+) -> Result<Json<TotientResponse>, ApiError> {
+    handle_totient(req)
+}
+
+fn handle_order(req: OrderRequest) -> Result<Json<OrderResponse>, ApiError> {
+    let order = math::multiplicative_order(req.a, req.m)?;
+    let is_primitive_root = math::is_primitive_root(req.a, req.m)?;
+    Ok(Json(OrderResponse {
+        a: req.a,
+        m: req.m,
+        order,
+        is_primitive_root,
+    }))
+}
+
+async fn math_order_get(Query(req): Query<OrderRequest>) -> Result<Json<OrderResponse>, ApiError> {
+    handle_order(req)
+}
+
+async fn math_order_post(Json(req): Json<OrderRequest>) -> Result<Json<OrderResponse>, ApiError> {
+    handle_order(req)
+}
+
 fn parse_crt_args(req: &CrtRequest) -> Result<(Vec<i64>, Vec<i64>), ApiError> {
     if let (Some(r), Some(m)) = (&req.remainders, &req.moduli) {
         return Ok((r.clone(), m.clone()));
@@ -681,6 +755,11 @@ fn app() -> Router {
             "/v1/math/factor",
             get(math_factor_get).post(math_factor_post),
         )
+        .route(
+            "/v1/math/totient",
+            get(math_totient_get).post(math_totient_post),
+        )
+        .route("/v1/math/order", get(math_order_get).post(math_order_post))
         .route("/v1/math/crt", get(math_crt_get).post(math_crt_post))
         .route("/v1/math/cf", get(math_cf_get).post(math_cf_post))
         .route("/v1/math/ecadd", get(math_ecadd_get).post(math_ecadd_post))
@@ -777,7 +856,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 21);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 25);
     }
 
     #[tokio::test]
@@ -1102,5 +1181,76 @@ mod tests {
         assert_eq!(body["seed"], 42);
         assert_eq!(body["count"], 2);
         assert_eq!(body["problems"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn tests_totient_and_order_get_and_post() {
+        // GET totient
+        let (status, body) = json_response(
+            Request::get("/v1/math/totient?n=360")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 360);
+        assert_eq!(body["phi"], 96);
+        assert_eq!(body["lambda"], 12);
+        assert_eq!(body["is_cyclic"], false);
+
+        // POST totient prime
+        let (status, body) = json_response(
+            Request::post("/v1/math/totient")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":7}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 7);
+        assert_eq!(body["phi"], 6);
+        assert_eq!(body["lambda"], 6);
+        assert_eq!(body["is_cyclic"], true);
+
+        // GET order
+        let (status, body) = json_response(
+            Request::get("/v1/math/order?a=3&m=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["a"], 3);
+        assert_eq!(body["m"], 7);
+        assert_eq!(body["order"], 6);
+        assert_eq!(body["is_primitive_root"], true);
+
+        // POST order
+        let (status, body) = json_response(
+            Request::post("/v1/math/order")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":2,"m":7}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["a"], 2);
+        assert_eq!(body["m"], 7);
+        assert_eq!(body["order"], 3);
+        assert_eq!(body["is_primitive_root"], false);
+
+        // Challenge with totient topic
+        let (status, body) = json_response(
+            Request::get("/v1/math/challenge?topic=totient")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["topic"], "totient");
+        assert!(body["problems"][0]["question"]
+            .as_str()
+            .unwrap()
+            .contains("phi"));
     }
 }
