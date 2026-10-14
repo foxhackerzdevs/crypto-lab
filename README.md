@@ -36,6 +36,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/mobius` | Configurable (Public or Basic Auth) | Möbius function $\mu(n)$ |
 | GET / POST | `/v1/math/sigma` | Configurable (Public or Basic Auth) | Sum of divisors function $\sigma_k(n)$ |
 | GET / POST | `/v1/math/tau` | Configurable (Public or Basic Auth) | Divisor count function $\tau(n)$ |
+| GET / POST | `/v1/math/arith` | Configurable (Public or Basic Auth) | Unified arithmetic suite ($\mu(n)$, $\sigma_k(n)$, $\tau(n)$) |
 | GET / POST | `/v1/math/crt` | Configurable (Public or Basic Auth) | Chinese Remainder Theorem solver (Extended GCD) |
 | GET / POST | `/v1/math/cf` | Configurable (Public or Basic Auth) | Continued fraction expansion & convergents |
 | GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
@@ -58,7 +59,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -83,6 +84,8 @@ Response:
     "POST /v1/math/sigma",
     "GET /v1/math/tau",
     "POST /v1/math/tau",
+    "GET /v1/math/arith",
+    "POST /v1/math/arith",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -273,22 +276,25 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dlog?g=3&h=6&p=7"
 }
 ```
 
-#### 7. Classical Arithmetic Functions (`/v1/math/mobius`, `/v1/math/sigma`, `/v1/math/tau`)
+#### 7. Classical Arithmetic Functions (`/v1/math/arith`, `/v1/math/mobius`, `/v1/math/sigma`, `/v1/math/tau`)
 Computes foundational multiplicative number-theoretic functions over positive integers $n \ge 1$:
 - **Möbius function $\mu(n)$**: Returns $(-1)^k$ for square-free $n$ with $k$ distinct prime factors, $0$ if $n$ has a squared prime factor, and $\mu(1) = 1$.
 - **Sum of divisors $\sigma_k(n)$**: Computes $\sum_{d|n} d^k$ (defaults to $k=1$).
 - **Divisor count $\tau(n)$**: Number of positive divisors of $n$.
+- **Unified arithmetic suite (`/v1/math/arith`)**: Derives $\mu(n)$, $\sigma_k(n)$, and $\tau(n)$ simultaneously in a single request from a shared prime factorization of $n$.
 
 ```bash
-# Möbius function mu(30)
+# Unified arithmetic suite (evaluates mu, sigma_k, and tau in 1 request)
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/arith?n=12&k=1"
+# {"n":12,"k":1,"mobius":0,"sigma":28,"tau":6}
+
+# Individual endpoints
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/mobius?n=30"
 # {"n":30,"value":-1}
 
-# Divisor sum sigma(12) = 1+2+3+4+6+12 = 28
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/sigma?n=12"
 # {"n":12,"k":1,"value":28}
 
-# Divisor count tau(12) = 6
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/tau?n=12"
 # {"n":12,"value":6}
 ```

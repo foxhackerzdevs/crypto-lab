@@ -40,6 +40,8 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/sigma",
     "GET /v1/math/tau",
     "POST /v1/math/tau",
+    "GET /v1/math/arith",
+    "POST /v1/math/arith",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -245,6 +247,21 @@ struct TauRequest {
 struct TauResponse {
     n: i64,
     value: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct ArithRequest {
+    n: i64,
+    k: Option<u32>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct ArithResponse {
+    n: i64,
+    k: u32,
+    mobius: i64,
+    sigma: i64,
+    tau: i64,
 }
 
 #[derive(Deserialize, Clone)]
@@ -635,6 +652,26 @@ async fn math_tau_post(Json(req): Json<TauRequest>) -> Result<Json<TauResponse>,
     handle_tau(req)
 }
 
+fn handle_arith(req: ArithRequest) -> Result<Json<ArithResponse>, ApiError> {
+    let k = req.k.unwrap_or(1);
+    let (mobius, sigma, tau) = math::arithmetic_suite(req.n, k)?;
+    Ok(Json(ArithResponse {
+        n: req.n,
+        k,
+        mobius,
+        sigma,
+        tau,
+    }))
+}
+
+async fn math_arith_get(Query(req): Query<ArithRequest>) -> Result<Json<ArithResponse>, ApiError> {
+    handle_arith(req)
+}
+
+async fn math_arith_post(Json(req): Json<ArithRequest>) -> Result<Json<ArithResponse>, ApiError> {
+    handle_arith(req)
+}
+
 fn parse_crt_args(req: &CrtRequest) -> Result<(Vec<i64>, Vec<i64>), ApiError> {
     if let (Some(r), Some(m)) = (&req.remainders, &req.moduli) {
         return Ok((r.clone(), m.clone()));
@@ -890,6 +927,7 @@ fn app() -> Router {
         )
         .route("/v1/math/sigma", get(math_sigma_get).post(math_sigma_post))
         .route("/v1/math/tau", get(math_tau_get).post(math_tau_post))
+        .route("/v1/math/arith", get(math_arith_get).post(math_arith_post))
         .route("/v1/math/crt", get(math_crt_get).post(math_crt_post))
         .route("/v1/math/cf", get(math_cf_get).post(math_cf_post))
         .route("/v1/math/ecadd", get(math_ecadd_get).post(math_ecadd_post))
@@ -986,7 +1024,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 33);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 35);
     }
 
     #[tokio::test]
@@ -1485,6 +1523,35 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["n"], 36);
         assert_eq!(body["value"], 9);
+
+        // GET arith (default k=1)
+        let (status, body) = json_response(
+            Request::get("/v1/math/arith?n=12")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 12);
+        assert_eq!(body["k"], 1);
+        assert_eq!(body["mobius"], 0);
+        assert_eq!(body["sigma"], 28);
+        assert_eq!(body["tau"], 6);
+
+        // POST arith with custom k
+        let (status, body) = json_response(
+            Request::post("/v1/math/arith")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":6,"k":2}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 6);
+        assert_eq!(body["k"], 2);
+        assert_eq!(body["mobius"], 1);
+        assert_eq!(body["sigma"], 50);
+        assert_eq!(body["tau"], 4);
 
         // Challenge with dlog topic
         let (status, body) = json_response(

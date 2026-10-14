@@ -736,40 +736,20 @@ pub fn discrete_log(g: i64, h: i64, p: i64) -> Result<i64, MathError> {
 
 // ------------------- Arithmetic Functions -------------------
 
-pub fn mobius(n: i64) -> Result<i64, MathError> {
-    if n < 1 {
-        return Err(MathError(
-            StatusCode::BAD_REQUEST,
-            "n must be a positive integer >= 1",
-        ));
-    }
-    if n == 1 {
-        return Ok(1);
-    }
-    let factors = factorize(n)?;
-    for f in &factors {
+fn mobius_from_factors(factors: &[PrimeFactor]) -> i64 {
+    for f in factors {
         if f.power > 1 {
-            return Ok(0);
+            return 0;
         }
     }
     if factors.len() % 2 == 1 {
-        Ok(-1)
+        -1
     } else {
-        Ok(1)
+        1
     }
 }
 
-pub fn tau(n: i64) -> Result<i64, MathError> {
-    if n < 1 {
-        return Err(MathError(
-            StatusCode::BAD_REQUEST,
-            "n must be a positive integer >= 1",
-        ));
-    }
-    if n == 1 {
-        return Ok(1);
-    }
-    let factors = factorize(n)?;
+fn tau_from_factors(factors: &[PrimeFactor]) -> Result<i64, MathError> {
     let mut total = 1i64;
     for f in factors {
         total = total
@@ -779,20 +759,10 @@ pub fn tau(n: i64) -> Result<i64, MathError> {
     Ok(total)
 }
 
-pub fn sigma(n: i64, k: u32) -> Result<i64, MathError> {
-    if n < 1 {
-        return Err(MathError(
-            StatusCode::BAD_REQUEST,
-            "n must be a positive integer >= 1",
-        ));
-    }
-    if n == 1 {
-        return Ok(1);
-    }
+fn sigma_from_factors(factors: &[PrimeFactor], k: u32) -> Result<i64, MathError> {
     if k == 0 {
-        return tau(n);
+        return tau_from_factors(factors);
     }
-    let factors = factorize(n)?;
     let mut total = 1i64;
     for f in factors {
         let mut term = 1i128;
@@ -816,6 +786,65 @@ pub fn sigma(n: i64, k: u32) -> Result<i64, MathError> {
             .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
     }
     Ok(total)
+}
+
+pub fn arithmetic_suite(n: i64, k: u32) -> Result<(i64, i64, i64), MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok((1, 1, 1));
+    }
+    let factors = factorize(n)?;
+    let mu = mobius_from_factors(&factors);
+    let sig = sigma_from_factors(&factors, k)?;
+    let t = tau_from_factors(&factors)?;
+    Ok((mu, sig, t))
+}
+
+pub fn mobius(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    Ok(mobius_from_factors(&factors))
+}
+
+pub fn tau(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    tau_from_factors(&factors)
+}
+
+pub fn sigma(n: i64, k: u32) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    sigma_from_factors(&factors, k)
 }
 
 // ------------------- Challenge / Quiz Generator -------------------
@@ -1193,5 +1222,12 @@ mod tests {
         assert_eq!(sigma(12, 0).unwrap(), 6);
         assert_eq!(sigma(6, 2).unwrap(), 50);
         assert!(sigma(0, 1).is_err());
+
+        // arithmetic_suite
+        assert_eq!(arithmetic_suite(1, 1).unwrap(), (1, 1, 1));
+        assert_eq!(arithmetic_suite(12, 1).unwrap(), (0, 28, 6));
+        assert_eq!(arithmetic_suite(30, 1).unwrap(), (-1, 72, 8));
+        assert_eq!(arithmetic_suite(6, 2).unwrap(), (1, 50, 4));
+        assert!(arithmetic_suite(0, 1).is_err());
     }
 }
