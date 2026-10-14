@@ -674,6 +674,150 @@ pub fn is_primitive_root(a: i64, m: i64) -> Result<bool, MathError> {
     Ok(order == phi)
 }
 
+// ------------------- Discrete Logarithm (BSGS) -------------------
+
+pub fn discrete_log(g: i64, h: i64, p: i64) -> Result<i64, MathError> {
+    if p <= 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus p must be greater than 1",
+        ));
+    }
+    let p128 = p as i128;
+    let g128 = (g as i128).rem_euclid(p128);
+    let h128 = (h as i128).rem_euclid(p128);
+
+    if h128 == 1 {
+        return Ok(0);
+    }
+
+    let (d, _, _) = egcd(g128, p128);
+    if d != 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Base g and modulus p must be coprime",
+        ));
+    }
+
+    let order = multiplicative_order(g, p)?;
+    let mut m = (order as f64).sqrt() as i64;
+    if m * m < order {
+        m += 1;
+    }
+
+    let mut table = std::collections::HashMap::with_capacity(m as usize);
+    let mut cur = 1i128;
+    for j in 0..m {
+        table.entry(cur as i64).or_insert(j);
+        cur = (cur * g128).rem_euclid(p128);
+    }
+
+    let gm = mod_pow(g128, m as i128, p128);
+    let factor =
+        mod_inv(gm, p128).ok_or(MathError(StatusCode::BAD_REQUEST, "modular inverse failed"))?;
+
+    let mut gamma = h128;
+    let steps = (order + m - 1) / m;
+    for i in 0..=steps {
+        if let Some(&j) = table.get(&(gamma as i64)) {
+            let ans = i * m + j;
+            if ans < order {
+                return Ok(ans);
+            }
+        }
+        gamma = (gamma * factor).rem_euclid(p128);
+    }
+
+    Err(MathError(
+        StatusCode::BAD_REQUEST,
+        "No discrete logarithm exists",
+    ))
+}
+
+// ------------------- Arithmetic Functions -------------------
+
+pub fn mobius(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    for f in &factors {
+        if f.power > 1 {
+            return Ok(0);
+        }
+    }
+    if factors.len() % 2 == 1 {
+        Ok(-1)
+    } else {
+        Ok(1)
+    }
+}
+
+pub fn tau(n: i64) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    let factors = factorize(n)?;
+    let mut total = 1i64;
+    for f in factors {
+        total = total
+            .checked_mul((f.power + 1) as i64)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+    }
+    Ok(total)
+}
+
+pub fn sigma(n: i64, k: u32) -> Result<i64, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if n == 1 {
+        return Ok(1);
+    }
+    if k == 0 {
+        return tau(n);
+    }
+    let factors = factorize(n)?;
+    let mut total = 1i64;
+    for f in factors {
+        let mut term = 1i128;
+        let mut cur = 1i128;
+        let p_pow_k = (f.prime as i128)
+            .checked_pow(k)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+        for _ in 0..f.power {
+            cur = cur
+                .checked_mul(p_pow_k)
+                .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+            term = term
+                .checked_add(cur)
+                .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+        }
+        if term > i64::MAX as i128 {
+            return Err(MathError(StatusCode::BAD_REQUEST, "integer overflow"));
+        }
+        total = total
+            .checked_mul(term as i64)
+            .ok_or(MathError(StatusCode::BAD_REQUEST, "integer overflow"))?;
+    }
+    Ok(total)
+}
+
 // ------------------- Challenge / Quiz Generator -------------------
 
 #[derive(Clone, Debug)]
@@ -718,7 +862,9 @@ pub struct ChallengeProblem {
 
 pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengeProblem, MathError> {
     let selected_topic = if topic == "mixed" {
-        let choices = ["legendre", "sqrtmod", "crt", "ecdlp", "factor", "totient"];
+        let choices = [
+            "legendre", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog",
+        ];
         *rng.choose(&choices)
     } else {
         topic
@@ -806,9 +952,32 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "dlog" => {
+            let problems = [
+                (2i64, 13i64),
+                (3, 17),
+                (2, 19),
+                (2, 29),
+                (3, 31),
+                (2, 37),
+                (3, 41),
+                (3, 43),
+                (2, 53),
+                (2, 59),
+            ];
+            let &(g, p) = rng.choose(&problems);
+            let order = multiplicative_order(g, p)?;
+            let x = rng.gen_range(1, order - 1);
+            let h = mod_pow(g as i128, x as i128, p as i128) as i64;
+            Ok(ChallengeProblem {
+                topic: "dlog".to_string(),
+                question: f!("Find x (0 ≤ x < {order}) such that {g}^x ≡ {h} (mod {p})"),
+                answer: x,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, sqrtmod, crt, ecdlp, factor, totient, or mixed",
+            "topic must be legendre, sqrtmod, crt, ecdlp, factor, totient, dlog, or mixed",
         )),
     }
 }
@@ -985,5 +1154,44 @@ mod tests {
         assert!(!is_primitive_root(2, 7).unwrap());
         assert!(!is_primitive_root(1, 7).unwrap());
         assert!(!is_primitive_root(3, 8).unwrap());
+    }
+
+    #[test]
+    fn test_discrete_log() {
+        assert_eq!(discrete_log(3, 6, 7).unwrap(), 3);
+        assert_eq!(discrete_log(2, 5, 13).unwrap(), 9);
+        assert_eq!(discrete_log(2, 1, 13).unwrap(), 0);
+        assert_eq!(discrete_log(2, 2, 13).unwrap(), 1);
+        assert!(discrete_log(2, 3, 7).is_err());
+        assert!(discrete_log(2, 5, 1).is_err());
+        assert!(discrete_log(2, 5, 6).is_err());
+    }
+
+    #[test]
+    fn test_arithmetic_functions() {
+        // mobius
+        assert_eq!(mobius(1).unwrap(), 1);
+        assert_eq!(mobius(2).unwrap(), -1);
+        assert_eq!(mobius(3).unwrap(), -1);
+        assert_eq!(mobius(4).unwrap(), 0);
+        assert_eq!(mobius(6).unwrap(), 1);
+        assert_eq!(mobius(12).unwrap(), 0);
+        assert_eq!(mobius(30).unwrap(), -1);
+        assert!(mobius(0).is_err());
+        assert!(mobius(-5).is_err());
+
+        // tau
+        assert_eq!(tau(1).unwrap(), 1);
+        assert_eq!(tau(2).unwrap(), 2);
+        assert_eq!(tau(12).unwrap(), 6);
+        assert_eq!(tau(36).unwrap(), 9);
+        assert!(tau(0).is_err());
+
+        // sigma
+        assert_eq!(sigma(1, 1).unwrap(), 1);
+        assert_eq!(sigma(12, 1).unwrap(), 28);
+        assert_eq!(sigma(12, 0).unwrap(), 6);
+        assert_eq!(sigma(6, 2).unwrap(), 50);
+        assert!(sigma(0, 1).is_err());
     }
 }

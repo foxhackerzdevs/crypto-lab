@@ -189,6 +189,57 @@ struct OrderResponse {
 }
 
 #[derive(Deserialize, Clone)]
+struct DlogRequest {
+    g: i64,
+    h: i64,
+    p: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct DlogResponse {
+    g: i64,
+    h: i64,
+    p: i64,
+    x: i64,
+    order: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct MobiusRequest {
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct MobiusResponse {
+    n: i64,
+    value: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct SigmaRequest {
+    n: i64,
+    k: Option<u32>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct SigmaResponse {
+    n: i64,
+    k: u32,
+    value: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct TauRequest {
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct TauResponse {
+    n: i64,
+    value: i64,
+}
+
+#[derive(Deserialize, Clone)]
 struct CrtRequest {
     remainders: Option<Vec<i64>>,
     moduli: Option<Vec<i64>>,
@@ -512,6 +563,70 @@ async fn math_order_post(Json(req): Json<OrderRequest>) -> Result<Json<OrderResp
     handle_order(req)
 }
 
+fn handle_dlog(req: DlogRequest) -> Result<Json<DlogResponse>, ApiError> {
+    let x = math::discrete_log(req.g, req.h, req.p)?;
+    let order = math::multiplicative_order(req.g, req.p)?;
+    Ok(Json(DlogResponse {
+        g: req.g,
+        h: req.h,
+        p: req.p,
+        x,
+        order,
+    }))
+}
+
+async fn math_dlog_get(Query(req): Query<DlogRequest>) -> Result<Json<DlogResponse>, ApiError> {
+    handle_dlog(req)
+}
+
+async fn math_dlog_post(Json(req): Json<DlogRequest>) -> Result<Json<DlogResponse>, ApiError> {
+    handle_dlog(req)
+}
+
+fn handle_mobius(req: MobiusRequest) -> Result<Json<MobiusResponse>, ApiError> {
+    let value = math::mobius(req.n)?;
+    Ok(Json(MobiusResponse { n: req.n, value }))
+}
+
+async fn math_mobius_get(
+    Query(req): Query<MobiusRequest>,
+) -> Result<Json<MobiusResponse>, ApiError> {
+    handle_mobius(req)
+}
+
+async fn math_mobius_post(
+    Json(req): Json<MobiusRequest>,
+) -> Result<Json<MobiusResponse>, ApiError> {
+    handle_mobius(req)
+}
+
+fn handle_sigma(req: SigmaRequest) -> Result<Json<SigmaResponse>, ApiError> {
+    let k = req.k.unwrap_or(1);
+    let value = math::sigma(req.n, k)?;
+    Ok(Json(SigmaResponse { n: req.n, k, value }))
+}
+
+async fn math_sigma_get(Query(req): Query<SigmaRequest>) -> Result<Json<SigmaResponse>, ApiError> {
+    handle_sigma(req)
+}
+
+async fn math_sigma_post(Json(req): Json<SigmaRequest>) -> Result<Json<SigmaResponse>, ApiError> {
+    handle_sigma(req)
+}
+
+fn handle_tau(req: TauRequest) -> Result<Json<TauResponse>, ApiError> {
+    let value = math::tau(req.n)?;
+    Ok(Json(TauResponse { n: req.n, value }))
+}
+
+async fn math_tau_get(Query(req): Query<TauRequest>) -> Result<Json<TauResponse>, ApiError> {
+    handle_tau(req)
+}
+
+async fn math_tau_post(Json(req): Json<TauRequest>) -> Result<Json<TauResponse>, ApiError> {
+    handle_tau(req)
+}
+
 fn parse_crt_args(req: &CrtRequest) -> Result<(Vec<i64>, Vec<i64>), ApiError> {
     if let (Some(r), Some(m)) = (&req.remainders, &req.moduli) {
         return Ok((r.clone(), m.clone()));
@@ -760,6 +875,13 @@ fn app() -> Router {
             get(math_totient_get).post(math_totient_post),
         )
         .route("/v1/math/order", get(math_order_get).post(math_order_post))
+        .route("/v1/math/dlog", get(math_dlog_get).post(math_dlog_post))
+        .route(
+            "/v1/math/mobius",
+            get(math_mobius_get).post(math_mobius_post),
+        )
+        .route("/v1/math/sigma", get(math_sigma_get).post(math_sigma_post))
+        .route("/v1/math/tau", get(math_tau_get).post(math_tau_post))
         .route("/v1/math/crt", get(math_crt_get).post(math_crt_post))
         .route("/v1/math/cf", get(math_cf_get).post(math_cf_post))
         .route("/v1/math/ecadd", get(math_ecadd_get).post(math_ecadd_post))
@@ -1252,5 +1374,122 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("phi"));
+    }
+
+    #[tokio::test]
+    async fn tests_dlog_and_arithmetic_endpoints() {
+        // GET dlog
+        let (status, body) = json_response(
+            Request::get("/v1/math/dlog?g=3&h=6&p=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["g"], 3);
+        assert_eq!(body["h"], 6);
+        assert_eq!(body["p"], 7);
+        assert_eq!(body["x"], 3);
+        assert_eq!(body["order"], 6);
+
+        // POST dlog
+        let (status, body) = json_response(
+            Request::post("/v1/math/dlog")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"g":2,"h":5,"p":13}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["g"], 2);
+        assert_eq!(body["h"], 5);
+        assert_eq!(body["p"], 13);
+        assert_eq!(body["x"], 9);
+        assert_eq!(body["order"], 12);
+
+        // GET mobius
+        let (status, body) = json_response(
+            Request::get("/v1/math/mobius?n=30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 30);
+        assert_eq!(body["value"], -1);
+
+        // POST mobius
+        let (status, body) = json_response(
+            Request::post("/v1/math/mobius")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":12}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 12);
+        assert_eq!(body["value"], 0);
+
+        // GET sigma (default k=1)
+        let (status, body) = json_response(
+            Request::get("/v1/math/sigma?n=12")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 12);
+        assert_eq!(body["k"], 1);
+        assert_eq!(body["value"], 28);
+
+        // POST sigma with custom k
+        let (status, body) = json_response(
+            Request::post("/v1/math/sigma")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":6,"k":2}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 6);
+        assert_eq!(body["k"], 2);
+        assert_eq!(body["value"], 50);
+
+        // GET tau
+        let (status, body) = json_response(
+            Request::get("/v1/math/tau?n=12")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 12);
+        assert_eq!(body["value"], 6);
+
+        // POST tau
+        let (status, body) = json_response(
+            Request::post("/v1/math/tau")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":36}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 36);
+        assert_eq!(body["value"], 9);
+
+        // Challenge with dlog topic
+        let (status, body) = json_response(
+            Request::get("/v1/math/challenge?topic=dlog")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["topic"], "dlog");
+        assert!(body["problems"][0]["question"]
+            .as_str()
+            .unwrap()
+            .contains("such that"));
     }
 }
