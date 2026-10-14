@@ -16,7 +16,7 @@ use subtle::ConstantTimeEq;
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_INPUT_BYTES: usize = 32 * 1024;
 
-const ENDPOINTS: [&str; 25] = [
+const ENDPOINTS: &[&str] = &[
     "GET /health",
     "GET /v1/info",
     "POST /v1/hash",
@@ -32,6 +32,14 @@ const ENDPOINTS: [&str; 25] = [
     "POST /v1/math/totient",
     "GET /v1/math/order",
     "POST /v1/math/order",
+    "GET /v1/math/dlog",
+    "POST /v1/math/dlog",
+    "GET /v1/math/mobius",
+    "POST /v1/math/mobius",
+    "GET /v1/math/sigma",
+    "POST /v1/math/sigma",
+    "GET /v1/math/tau",
+    "POST /v1/math/tau",
     "GET /v1/math/crt",
     "POST /v1/math/crt",
     "GET /v1/math/cf",
@@ -55,7 +63,7 @@ struct Info {
     service: &'static str,
     api: &'static str,
     version: &'static str,
-    endpoints: [&'static str; 25],
+    endpoints: &'static [&'static str],
     build_profile: &'static str,
     environment: &'static str,
 }
@@ -978,7 +986,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 25);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 33);
     }
 
     #[tokio::test]
