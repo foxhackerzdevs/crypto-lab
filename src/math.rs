@@ -73,6 +73,83 @@ pub fn legendre_symbol(a: i64, p: i64) -> Result<i32, MathError> {
     }
 }
 
+// ------------------- Jacobi Symbol -------------------
+
+pub fn jacobi_symbol(a: i64, n: i64) -> Result<i32, MathError> {
+    if n <= 0 || n % 2 == 0 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive odd integer",
+        ));
+    }
+    let mut a128 = (a as i128).rem_euclid(n as i128);
+    let mut n128 = n as i128;
+    let mut result = 1i32;
+
+    while a128 != 0 {
+        while a128 % 2 == 0 {
+            a128 /= 2;
+            let n_mod_8 = n128 % 8;
+            if n_mod_8 == 3 || n_mod_8 == 5 {
+                result = -result;
+            }
+        }
+
+        if a128 % 4 == 3 && n128 % 4 == 3 {
+            result = -result;
+        }
+
+        let temp = a128;
+        a128 = n128 % a128;
+        n128 = temp;
+    }
+
+    if n128 == 1 {
+        Ok(result)
+    } else {
+        Ok(0)
+    }
+}
+
+// ------------------- Solovay-Strassen Primality Test -------------------
+
+pub fn solovay_strassen(n: i64, rounds: u32, rng: &mut SimpleRng) -> Result<bool, MathError> {
+    if n < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be a positive integer >= 1",
+        ));
+    }
+    if rounds < 1 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "rounds must be >= 1"));
+    }
+    if n < 2 {
+        return Ok(false);
+    }
+    if n == 2 || n == 3 {
+        return Ok(true);
+    }
+    if n % 2 == 0 {
+        return Ok(false);
+    }
+
+    let n128 = n as i128;
+    let rounds = rounds.min(100);
+    for _ in 0..rounds {
+        let a = if n > 4 { rng.gen_range(2, n - 2) } else { 2 };
+        let x = jacobi_symbol(a, n)?;
+        if x == 0 {
+            return Ok(false);
+        }
+        let mod_exp = mod_pow(a as i128, (n128 - 1) / 2, n128);
+        let x_mod = (x as i128).rem_euclid(n128);
+        if mod_exp != x_mod {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 // ------------------- Tonelli-Shanks Modular Square Root -------------------
 
 pub fn sqrt_mod(a: i64, p: i64) -> Result<Vec<i64>, MathError> {
@@ -892,7 +969,7 @@ pub struct ChallengeProblem {
 pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengeProblem, MathError> {
     let selected_topic = if topic == "mixed" {
         let choices = [
-            "legendre", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog",
+            "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog",
         ];
         *rng.choose(&choices)
     } else {
@@ -1004,9 +1081,23 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: x,
             })
         }
+        "jacobi" => {
+            let moduli = [
+                9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 39, 45, 51, 55, 63, 65, 77,
+                85, 91, 99,
+            ];
+            let n = *rng.choose(&moduli);
+            let a = rng.gen_range(1, n - 1);
+            let ans = jacobi_symbol(a, n)? as i64;
+            Ok(ChallengeProblem {
+                topic: "jacobi".to_string(),
+                question: f!("Jacobi symbol ({a}/{n})"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, sqrtmod, crt, ecdlp, factor, totient, dlog, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, or mixed",
         )),
     }
 }
@@ -1030,6 +1121,39 @@ mod tests {
         assert_eq!(legendre_symbol(0, 17).unwrap(), 0);
         assert!(legendre_symbol(2, 2).is_err());
         assert!(legendre_symbol(2, 1).is_err());
+    }
+
+    #[test]
+    fn test_jacobi_symbol() {
+        assert_eq!(jacobi_symbol(2, 15).unwrap(), 1);
+        assert_eq!(jacobi_symbol(10, 21).unwrap(), -1);
+        assert_eq!(jacobi_symbol(14, 21).unwrap(), 0);
+        assert_eq!(jacobi_symbol(0, 15).unwrap(), 0);
+        assert_eq!(jacobi_symbol(0, 1).unwrap(), 1);
+        assert_eq!(jacobi_symbol(1, 1).unwrap(), 1);
+        assert_eq!(jacobi_symbol(2, 1).unwrap(), 1);
+        assert_eq!(jacobi_symbol(-1, 15).unwrap(), -1);
+        assert_eq!(jacobi_symbol(2, 7).unwrap(), 1);
+        assert_eq!(jacobi_symbol(5, 17).unwrap(), -1);
+        assert!(jacobi_symbol(2, 0).is_err());
+        assert!(jacobi_symbol(2, -3).is_err());
+        assert!(jacobi_symbol(2, 4).is_err());
+    }
+
+    #[test]
+    fn test_solovay_strassen() {
+        let mut rng = SimpleRng::new(42);
+        assert!(solovay_strassen(2, 20, &mut rng).unwrap());
+        assert!(solovay_strassen(3, 20, &mut rng).unwrap());
+        assert!(solovay_strassen(104729, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(1, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(4, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(561, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(1105, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(1729, 20, &mut rng).unwrap());
+        assert!(!solovay_strassen(91, 20, &mut rng).unwrap());
+        assert!(solovay_strassen(0, 20, &mut rng).is_err());
+        assert!(solovay_strassen(7, 0, &mut rng).is_err());
     }
 
     #[test]

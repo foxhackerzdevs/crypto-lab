@@ -28,6 +28,8 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | POST | `/v1/hmac` | Basic Auth at Nginx | HMAC generation |
 | POST | `/v1/hmac/verify` | Basic Auth at Nginx | Constant-time HMAC verification |
 | GET / POST | `/v1/math/legendre` | Configurable (Public or Basic Auth) | Legendre symbol $(a/p)$ via Euler's criterion |
+| GET / POST | `/v1/math/jacobi` | Configurable (Public or Basic Auth) | Jacobi symbol $(a/n)$ for positive odd $n$ |
+| GET / POST | `/v1/math/solovay` | Configurable (Public or Basic Auth) | Solovay–Strassen probabilistic primality test |
 | GET / POST | `/v1/math/sqrtmod` | Configurable (Public or Basic Auth) | Modular square roots via Tonelli-Shanks |
 | GET / POST | `/v1/math/factor` | Configurable (Public or Basic Auth) | Prime factorization via Pollard's rho & trial division |
 | GET / POST | `/v1/math/totient` | Configurable (Public or Basic Auth) | Euler's totient $\phi(n)$ and Carmichael $\lambda(n)$ |
@@ -59,7 +61,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -68,6 +70,10 @@ Response:
     "POST /v1/hmac/verify",
     "GET /v1/math/legendre",
     "POST /v1/math/legendre",
+    "GET /v1/math/jacobi",
+    "POST /v1/math/jacobi",
+    "GET /v1/math/solovay",
+    "POST /v1/math/solovay",
     "GET /v1/math/sqrtmod",
     "POST /v1/math/sqrtmod",
     "GET /v1/math/factor",
@@ -190,7 +196,35 @@ curl -sS -H "content-type: application/json" \
 # {"a":5,"p":17,"value":-1}
 ```
 
-#### 2. Modular Square Roots (`/v1/math/sqrtmod`)
+#### 2. Jacobi Symbol (`/v1/math/jacobi`)
+Generalizes the Legendre symbol $(a/p)$ to any positive odd integer $n$ via quadratic reciprocity in $O(\log n)$ without factoring $n$. Returns `1`, `-1`, or `0` ($\gcd(a, n) > 1$).
+
+```bash
+# GET via query parameters
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/jacobi?a=10&n=21"
+# {"a":10,"n":21,"value":-1}
+
+# POST via JSON
+curl -sS -H "content-type: application/json" \
+  -d '{"a": 2, "n": 15}' \
+  https://abhrankan.duckdns.org/crypto-api/v1/math/jacobi
+# {"a":2,"n":15,"value":1}
+```
+
+#### 3. Solovay–Strassen Primality Test (`/v1/math/solovay`)
+Probabilistic primality test checking Euler's criterion $a^{(n-1)/2} \equiv (a/n) \pmod n$ for random bases $a$ across configurable rounds (default `20`). Detects Euler pseudoprimes and Carmichael numbers that evade naive Fermat tests.
+
+```bash
+# Solovay-Strassen test on prime 104729
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/solovay?n=104729&rounds=20"
+# {"n":104729,"rounds":20,"is_prime":true}
+
+# Solovay-Strassen test on Carmichael composite 561
+curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/solovay?n=561&rounds=20"
+# {"n":561,"rounds":20,"is_prime":false}
+```
+
+#### 4. Modular Square Roots (`/v1/math/sqrtmod`)
 Finds square roots modulo an odd prime $p$ via the Tonelli-Shanks algorithm ($O(\log p)$ fast path for $p \equiv 3 \pmod 4$).
 
 ```bash
@@ -204,7 +238,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13"
 }
 ```
 
-#### 3. Prime Factorization (`/v1/math/factor`)
+#### 5. Prime Factorization (`/v1/math/factor`)
 Decomposes an integer $n \ge 1$ into sorted prime powers using trial division and Pollard's $\rho$ (Brent's variant) with deterministic Miller-Rabin primality verification.
 
 ```bash
@@ -230,7 +264,7 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 4. Euler's Totient & Carmichael Function (`/v1/math/totient`)
+#### 6. Euler's Totient & Carmichael Function (`/v1/math/totient`)
 Computes Euler's totient $\phi(n)$ (number of coprime residues $\le n$) and Carmichael's universal exponent $\lambda(n)$, and verifies whether $(\mathbb{Z}/n\mathbb{Z})^\times$ is cyclic.
 
 ```bash
@@ -245,7 +279,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/totient?n=360"
 }
 ```
 
-#### 5. Multiplicative Order & Primitive Roots (`/v1/math/order`)
+#### 7. Multiplicative Order & Primitive Roots (`/v1/math/order`)
 Computes the exact multiplicative order $\mathrm{ord}_m(a)$ — the smallest $k \ge 1$ such that $a^k \equiv 1 \pmod m$ via prime-factor reduction over $\lambda(m)$. Automatically determines if $a$ is a primitive root modulo $m$.
 
 ```bash
@@ -260,7 +294,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/order?a=3&m=7"
 }
 ```
 
-#### 6. Discrete Logarithm (`/v1/math/dlog`)
+#### 8. Discrete Logarithm (`/v1/math/dlog`)
 Solves the discrete logarithm problem $g^x \equiv h \pmod p$ using Shanks' Baby-step Giant-step algorithm in $O(\sqrt{\mathrm{ord}_p(g)})$ time and space.
 
 ```bash
@@ -276,7 +310,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dlog?g=3&h=6&p=7"
 }
 ```
 
-#### 7. Classical Arithmetic Functions (`/v1/math/arith`, `/v1/math/mobius`, `/v1/math/sigma`, `/v1/math/tau`)
+#### 9. Classical Arithmetic Functions (`/v1/math/arith`, `/v1/math/mobius`, `/v1/math/sigma`, `/v1/math/tau`)
 Computes foundational multiplicative number-theoretic functions over positive integers $n \ge 1$:
 - **Möbius function $\mu(n)$**: Returns $(-1)^k$ for square-free $n$ with $k$ distinct prime factors, $0$ if $n$ has a squared prime factor, and $\mu(1) = 1$.
 - **Sum of divisors $\sigma_k(n)$**: Computes $\sum_{d|n} d^k$ (defaults to $k=1$).
@@ -299,7 +333,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/tau?n=12"
 # {"n":12,"value":6}
 ```
 
-#### 8. Chinese Remainder Theorem (`/v1/math/crt`)
+#### 10. Chinese Remainder Theorem (`/v1/math/crt`)
 Solves simultaneous congruences $x \equiv r_i \pmod{m_i}$ using Extended Euclidean GCD.
 
 ```bash
@@ -320,7 +354,7 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 9. Continued Fraction Expansion (`/v1/math/cf`)
+#### 11. Continued Fraction Expansion (`/v1/math/cf`)
 Expands rational fraction $num/den$ into simple continued fraction terms and computes intermediate convergents.
 
 ```bash
@@ -339,7 +373,7 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/cf?num=355&den=113"
 }
 ```
 
-#### 10. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
+#### 12. Elliptic Curve Point Addition & Multiplication (`/v1/math/ecadd`, `/v1/math/ecmul`)
 Performs group operations over $\mathbb{F}_p$ for Weierstrass curves $y^2 \equiv x^3 + ax + b \pmod p$. Built-in presets: `toy97` and `toy193`. Returns `null` if the result is the point at infinity (identity).
 
 ```bash
@@ -358,8 +392,8 @@ curl -sS -H "content-type: application/json" \
 }
 ```
 
-#### 11. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, and `mixed`.
+#### 13. Challenge Generator (`/v1/math/challenge`)
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"

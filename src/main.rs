@@ -24,6 +24,10 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/hmac/verify",
     "GET /v1/math/legendre",
     "POST /v1/math/legendre",
+    "GET /v1/math/jacobi",
+    "POST /v1/math/jacobi",
+    "GET /v1/math/solovay",
+    "POST /v1/math/solovay",
     "GET /v1/math/sqrtmod",
     "POST /v1/math/sqrtmod",
     "GET /v1/math/factor",
@@ -142,6 +146,33 @@ struct LegendreResponse {
     a: i64,
     p: i64,
     value: i32,
+}
+
+#[derive(Deserialize, Clone)]
+struct JacobiRequest {
+    a: i64,
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct JacobiResponse {
+    a: i64,
+    n: i64,
+    value: i32,
+}
+
+#[derive(Deserialize, Clone)]
+struct SolovayRequest {
+    n: i64,
+    rounds: Option<u32>,
+    seed: Option<u64>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct SolovayResponse {
+    n: i64,
+    rounds: u32,
+    is_prime: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -496,6 +527,56 @@ async fn math_legendre_post(
     Json(req): Json<LegendreRequest>,
 ) -> Result<Json<LegendreResponse>, ApiError> {
     handle_legendre(req)
+}
+
+fn handle_jacobi(req: JacobiRequest) -> Result<Json<JacobiResponse>, ApiError> {
+    let value = math::jacobi_symbol(req.a, req.n)?;
+    Ok(Json(JacobiResponse {
+        a: req.a,
+        n: req.n,
+        value,
+    }))
+}
+
+async fn math_jacobi_get(
+    Query(req): Query<JacobiRequest>,
+) -> Result<Json<JacobiResponse>, ApiError> {
+    handle_jacobi(req)
+}
+
+async fn math_jacobi_post(
+    Json(req): Json<JacobiRequest>,
+) -> Result<Json<JacobiResponse>, ApiError> {
+    handle_jacobi(req)
+}
+
+fn handle_solovay(req: SolovayRequest) -> Result<Json<SolovayResponse>, ApiError> {
+    let rounds = req.rounds.unwrap_or(20);
+    let seed = req.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(42)
+    });
+    let mut rng = math::SimpleRng::new(seed);
+    let is_prime = math::solovay_strassen(req.n, rounds, &mut rng)?;
+    Ok(Json(SolovayResponse {
+        n: req.n,
+        rounds,
+        is_prime,
+    }))
+}
+
+async fn math_solovay_get(
+    Query(req): Query<SolovayRequest>,
+) -> Result<Json<SolovayResponse>, ApiError> {
+    handle_solovay(req)
+}
+
+async fn math_solovay_post(
+    Json(req): Json<SolovayRequest>,
+) -> Result<Json<SolovayResponse>, ApiError> {
+    handle_solovay(req)
 }
 
 fn handle_sqrtmod(req: SqrtModRequest) -> Result<Json<SqrtModResponse>, ApiError> {
@@ -908,6 +989,14 @@ fn app() -> Router {
             get(math_legendre_get).post(math_legendre_post),
         )
         .route(
+            "/v1/math/jacobi",
+            get(math_jacobi_get).post(math_jacobi_post),
+        )
+        .route(
+            "/v1/math/solovay",
+            get(math_solovay_get).post(math_solovay_post),
+        )
+        .route(
             "/v1/math/sqrtmod",
             get(math_sqrtmod_get).post(math_sqrtmod_post),
         )
@@ -1024,7 +1113,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 35);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 39);
     }
 
     #[tokio::test]
@@ -1566,5 +1655,68 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("such that"));
+
+        // GET jacobi
+        let (status, body) = json_response(
+            Request::get("/v1/math/jacobi?a=10&n=21")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["a"], 10);
+        assert_eq!(body["n"], 21);
+        assert_eq!(body["value"], -1);
+
+        // POST jacobi
+        let (status, body) = json_response(
+            Request::post("/v1/math/jacobi")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"a":2,"n":15}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["a"], 2);
+        assert_eq!(body["n"], 15);
+        assert_eq!(body["value"], 1);
+
+        // GET solovay (prime)
+        let (status, body) = json_response(
+            Request::get("/v1/math/solovay?n=104729&rounds=20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 104729);
+        assert_eq!(body["rounds"], 20);
+        assert_eq!(body["is_prime"], true);
+
+        // POST solovay (Carmichael composite)
+        let (status, body) = json_response(
+            Request::post("/v1/math/solovay")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":561,"rounds":20,"seed":42}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["n"], 561);
+        assert_eq!(body["is_prime"], false);
+
+        // Challenge with jacobi topic
+        let (status, body) = json_response(
+            Request::get("/v1/math/challenge?topic=jacobi")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["topic"], "jacobi");
+        assert!(body["problems"][0]["question"]
+            .as_str()
+            .unwrap()
+            .contains("Jacobi"));
     }
 }
