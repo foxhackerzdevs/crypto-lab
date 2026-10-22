@@ -56,6 +56,20 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/ecmul",
     "GET /v1/math/challenge",
     "POST /v1/math/challenge",
+    "GET /v1/math/rsa/keygen",
+    "POST /v1/math/rsa/keygen",
+    "GET /v1/math/rsa/encrypt",
+    "POST /v1/math/rsa/encrypt",
+    "GET /v1/math/rsa/decrypt",
+    "POST /v1/math/rsa/decrypt",
+    "GET /v1/math/rsa/crack",
+    "POST /v1/math/rsa/crack",
+    "GET /v1/math/dh/keygen",
+    "POST /v1/math/dh/keygen",
+    "GET /v1/math/dh/derive",
+    "POST /v1/math/dh/derive",
+    "GET /v1/math/dh/crack",
+    "POST /v1/math/dh/crack",
 ];
 
 #[derive(Serialize)]
@@ -387,6 +401,91 @@ struct ChallengeResponse {
     seed: u64,
     count: usize,
     problems: Vec<math::ChallengeProblem>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct RsaKeygenRequest {
+    bits: Option<u32>,
+    e: Option<i64>,
+    seed: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct RsaEncryptRequest {
+    m: i64,
+    e: i64,
+    n: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct RsaEncryptResponse {
+    m: i64,
+    e: i64,
+    n: i64,
+    c: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct RsaDecryptRequest {
+    c: i64,
+    d: i64,
+    n: i64,
+    p: Option<i64>,
+    q: Option<i64>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct RsaDecryptResponse {
+    c: i64,
+    d: i64,
+    n: i64,
+    m: i64,
+    crt_used: bool,
+}
+
+#[derive(Deserialize, Clone)]
+struct RsaCrackRequest {
+    n: i64,
+    e: i64,
+    c: Option<i64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct DhKeygenRequest {
+    p: i64,
+    g: i64,
+    private_key: Option<i64>,
+    seed: Option<u64>,
+}
+
+#[derive(Deserialize, Clone)]
+struct DhDeriveRequest {
+    private_key: i64,
+    peer_public_key: i64,
+    p: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct DhDeriveResponse {
+    private_key: i64,
+    peer_public_key: i64,
+    p: i64,
+    shared_secret: i64,
+}
+
+#[derive(Deserialize, Clone)]
+struct DhCrackRequest {
+    g: i64,
+    public_key: i64,
+    p: i64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct DhCrackResponse {
+    g: i64,
+    public_key: i64,
+    p: i64,
+    private_key: i64,
 }
 
 #[derive(Clone, Copy)]
@@ -977,6 +1076,163 @@ async fn math_challenge_post(
     handle_challenge(req)
 }
 
+fn handle_rsa_keygen(req: RsaKeygenRequest) -> Result<Json<math::RsaKeypair>, ApiError> {
+    let bits = req.bits.unwrap_or(32);
+    let e = req.e.unwrap_or(65537);
+    let seed = req.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(42)
+    });
+    let mut rng = math::SimpleRng::new(seed);
+    let keys = math::rsa_keygen(bits, e, &mut rng)?;
+    Ok(Json(keys))
+}
+
+async fn math_rsa_keygen_get(
+    Query(req): Query<RsaKeygenRequest>,
+) -> Result<Json<math::RsaKeypair>, ApiError> {
+    handle_rsa_keygen(req)
+}
+
+async fn math_rsa_keygen_post(
+    Json(req): Json<RsaKeygenRequest>,
+) -> Result<Json<math::RsaKeypair>, ApiError> {
+    handle_rsa_keygen(req)
+}
+
+fn handle_rsa_encrypt(req: RsaEncryptRequest) -> Result<Json<RsaEncryptResponse>, ApiError> {
+    let c = math::rsa_encrypt(req.m, req.e, req.n)?;
+    Ok(Json(RsaEncryptResponse {
+        m: req.m,
+        e: req.e,
+        n: req.n,
+        c,
+    }))
+}
+
+async fn math_rsa_encrypt_get(
+    Query(req): Query<RsaEncryptRequest>,
+) -> Result<Json<RsaEncryptResponse>, ApiError> {
+    handle_rsa_encrypt(req)
+}
+
+async fn math_rsa_encrypt_post(
+    Json(req): Json<RsaEncryptRequest>,
+) -> Result<Json<RsaEncryptResponse>, ApiError> {
+    handle_rsa_encrypt(req)
+}
+
+fn handle_rsa_decrypt(req: RsaDecryptRequest) -> Result<Json<RsaDecryptResponse>, ApiError> {
+    let crt_used = req.p.is_some() && req.q.is_some();
+    let m = math::rsa_decrypt(req.c, req.d, req.n, req.p, req.q)?;
+    Ok(Json(RsaDecryptResponse {
+        c: req.c,
+        d: req.d,
+        n: req.n,
+        m,
+        crt_used,
+    }))
+}
+
+async fn math_rsa_decrypt_get(
+    Query(req): Query<RsaDecryptRequest>,
+) -> Result<Json<RsaDecryptResponse>, ApiError> {
+    handle_rsa_decrypt(req)
+}
+
+async fn math_rsa_decrypt_post(
+    Json(req): Json<RsaDecryptRequest>,
+) -> Result<Json<RsaDecryptResponse>, ApiError> {
+    handle_rsa_decrypt(req)
+}
+
+fn handle_rsa_crack(req: RsaCrackRequest) -> Result<Json<math::RsaCrackResult>, ApiError> {
+    let res = math::rsa_crack(req.n, req.e, req.c)?;
+    Ok(Json(res))
+}
+
+async fn math_rsa_crack_get(
+    Query(req): Query<RsaCrackRequest>,
+) -> Result<Json<math::RsaCrackResult>, ApiError> {
+    handle_rsa_crack(req)
+}
+
+async fn math_rsa_crack_post(
+    Json(req): Json<RsaCrackRequest>,
+) -> Result<Json<math::RsaCrackResult>, ApiError> {
+    handle_rsa_crack(req)
+}
+
+fn handle_dh_keygen(req: DhKeygenRequest) -> Result<Json<math::DhKeypair>, ApiError> {
+    let seed = req.seed.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(42)
+    });
+    let mut rng = math::SimpleRng::new(seed);
+    let keys = math::dh_keygen(req.p, req.g, req.private_key, &mut rng)?;
+    Ok(Json(keys))
+}
+
+async fn math_dh_keygen_get(
+    Query(req): Query<DhKeygenRequest>,
+) -> Result<Json<math::DhKeypair>, ApiError> {
+    handle_dh_keygen(req)
+}
+
+async fn math_dh_keygen_post(
+    Json(req): Json<DhKeygenRequest>,
+) -> Result<Json<math::DhKeypair>, ApiError> {
+    handle_dh_keygen(req)
+}
+
+fn handle_dh_derive(req: DhDeriveRequest) -> Result<Json<DhDeriveResponse>, ApiError> {
+    let shared_secret = math::dh_derive(req.private_key, req.peer_public_key, req.p)?;
+    Ok(Json(DhDeriveResponse {
+        private_key: req.private_key,
+        peer_public_key: req.peer_public_key,
+        p: req.p,
+        shared_secret,
+    }))
+}
+
+async fn math_dh_derive_get(
+    Query(req): Query<DhDeriveRequest>,
+) -> Result<Json<DhDeriveResponse>, ApiError> {
+    handle_dh_derive(req)
+}
+
+async fn math_dh_derive_post(
+    Json(req): Json<DhDeriveRequest>,
+) -> Result<Json<DhDeriveResponse>, ApiError> {
+    handle_dh_derive(req)
+}
+
+fn handle_dh_crack(req: DhCrackRequest) -> Result<Json<DhCrackResponse>, ApiError> {
+    let res = math::dh_crack(req.g, req.public_key, req.p)?;
+    Ok(Json(DhCrackResponse {
+        g: res.g,
+        public_key: res.public_key,
+        p: res.p,
+        private_key: res.private_key,
+    }))
+}
+
+async fn math_dh_crack_get(
+    Query(req): Query<DhCrackRequest>,
+) -> Result<Json<DhCrackResponse>, ApiError> {
+    handle_dh_crack(req)
+}
+
+async fn math_dh_crack_post(
+    Json(req): Json<DhCrackRequest>,
+) -> Result<Json<DhCrackResponse>, ApiError> {
+    handle_dh_crack(req)
+}
+
 fn app() -> Router {
     Router::new()
         .route("/health", get(health))
@@ -1024,6 +1280,34 @@ fn app() -> Router {
         .route(
             "/v1/math/challenge",
             get(math_challenge_get).post(math_challenge_post),
+        )
+        .route(
+            "/v1/math/rsa/keygen",
+            get(math_rsa_keygen_get).post(math_rsa_keygen_post),
+        )
+        .route(
+            "/v1/math/rsa/encrypt",
+            get(math_rsa_encrypt_get).post(math_rsa_encrypt_post),
+        )
+        .route(
+            "/v1/math/rsa/decrypt",
+            get(math_rsa_decrypt_get).post(math_rsa_decrypt_post),
+        )
+        .route(
+            "/v1/math/rsa/crack",
+            get(math_rsa_crack_get).post(math_rsa_crack_post),
+        )
+        .route(
+            "/v1/math/dh/keygen",
+            get(math_dh_keygen_get).post(math_dh_keygen_post),
+        )
+        .route(
+            "/v1/math/dh/derive",
+            get(math_dh_derive_get).post(math_dh_derive_post),
+        )
+        .route(
+            "/v1/math/dh/crack",
+            get(math_dh_crack_get).post(math_dh_crack_post),
         )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
@@ -1113,7 +1397,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 39);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 53);
     }
 
     #[tokio::test]
@@ -1718,5 +2002,176 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Jacobi"));
+    }
+
+    #[tokio::test]
+    async fn tests_rsa_and_dh_endpoints() {
+        // RSA Keygen GET
+        let (status, body) = json_response(
+            Request::get("/v1/math/rsa/keygen?bits=32&seed=42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let n = body["n"].as_i64().unwrap();
+        let e = body["e"].as_i64().unwrap();
+        let d = body["d"].as_i64().unwrap();
+        let p = body["p"].as_i64().unwrap();
+        let q = body["q"].as_i64().unwrap();
+        assert_eq!(p * q, n);
+        assert_eq!(e, 65537);
+
+        // RSA Encrypt GET & POST
+        let (status, body_enc) = json_response(
+            Request::get(format!("/v1/math/rsa/encrypt?m=42&e={e}&n={n}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let c = body_enc["c"].as_i64().unwrap();
+
+        let (status, body_enc_post) = json_response(
+            Request::post("/v1/math/rsa/encrypt")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"m":42,"e":{e},"n":{n}}}"#)))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_enc_post["c"], c);
+
+        // RSA Decrypt GET (without CRT)
+        let (status, body_dec) = json_response(
+            Request::get(format!("/v1/math/rsa/decrypt?c={c}&d={d}&n={n}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_dec["m"], 42);
+        assert_eq!(body_dec["crt_used"], false);
+
+        // RSA Decrypt POST (with CRT)
+        let (status, body_dec_crt) = json_response(
+            Request::post("/v1/math/rsa/decrypt")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"c":{c},"d":{d},"n":{n},"p":{p},"q":{q}}}"#
+                )))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_dec_crt["m"], 42);
+        assert_eq!(body_dec_crt["crt_used"], true);
+
+        // RSA Crack GET & POST
+        let (status, body_crack) = json_response(
+            Request::get(format!("/v1/math/rsa/crack?n={n}&e={e}&c={c}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_crack["p"], p);
+        assert_eq!(body_crack["q"], q);
+        assert_eq!(body_crack["d"], d);
+        assert_eq!(body_crack["m"], 42);
+
+        let (status, body_crack_post) = json_response(
+            Request::post("/v1/math/rsa/crack")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"n":{n},"e":{e},"c":{c}}}"#)))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_crack_post["d"], d);
+        assert_eq!(body_crack_post["m"], 42);
+
+        // DH Keygen GET (Alice: p=23, g=5, a=6)
+        let (status, body_alice) = json_response(
+            Request::get("/v1/math/dh/keygen?p=23&g=5&private_key=6")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_alice["public_key"], 8);
+
+        // DH Keygen POST (Bob: p=23, g=5, a=15)
+        let (status, body_bob) = json_response(
+            Request::post("/v1/math/dh/keygen")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"p":23,"g":5,"private_key":15}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_bob["public_key"], 19);
+
+        // DH Derive GET (Alice derives from Bob's public key)
+        let (status, body_s_alice) = json_response(
+            Request::get("/v1/math/dh/derive?private_key=6&peer_public_key=19&p=23")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_s_alice["shared_secret"], 2);
+
+        // DH Derive POST (Bob derives from Alice's public key)
+        let (status, body_s_bob) = json_response(
+            Request::post("/v1/math/dh/derive")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"private_key":15,"peer_public_key":8,"p":23}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_s_bob["shared_secret"], 2);
+
+        // DH Crack GET & POST (recover Alice's private key 6 from public key 8)
+        let (status, body_crack_dh) = json_response(
+            Request::get("/v1/math/dh/crack?g=5&public_key=8&p=23")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_crack_dh["private_key"], 6);
+
+        let (status, body_crack_dh_post) = json_response(
+            Request::post("/v1/math/dh/crack")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"g":5,"public_key":19,"p":23}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_crack_dh_post["private_key"], 15);
+
+        // Challenge RSA & DH topics
+        let (status, body_chal_rsa) = json_response(
+            Request::get("/v1/math/challenge?topic=rsa")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_chal_rsa["topic"], "rsa");
+
+        let (status, body_chal_dh) = json_response(
+            Request::get("/v1/math/challenge?topic=dh")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_chal_dh["topic"], "dh");
     }
 }

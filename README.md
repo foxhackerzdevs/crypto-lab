@@ -44,6 +44,13 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/ecadd` | Configurable (Public or Basic Auth) | Elliptic curve point addition over $\mathbb{F}_p$ |
 | GET / POST | `/v1/math/ecmul` | Configurable (Public or Basic Auth) | Elliptic curve scalar multiplication $k \cdot P$ |
 | GET / POST | `/v1/math/challenge` | Configurable (Public or Basic Auth) | Seeded, reproducible math & crypto challenges |
+| GET / POST | `/v1/math/rsa/keygen` | Configurable (Public or Basic Auth) | Textbook RSA keypair generation $(p, q, n, e, d, \phi, \lambda, d_p, d_q, q_{\text{inv}})$ |
+| GET / POST | `/v1/math/rsa/encrypt` | Configurable (Public or Basic Auth) | Textbook RSA encryption ($c \equiv m^e \pmod n$) |
+| GET / POST | `/v1/math/rsa/decrypt` | Configurable (Public or Basic Auth) | Textbook RSA decryption with optional CRT acceleration |
+| GET / POST | `/v1/math/rsa/crack` | Configurable (Public or Basic Auth) | RSA modulus factoring attack via Pollard $\rho$ |
+| GET / POST | `/v1/math/dh/keygen` | Configurable (Public or Basic Auth) | Diffie–Hellman keypair generation ($A \equiv g^a \pmod p$) |
+| GET / POST | `/v1/math/dh/derive` | Configurable (Public or Basic Auth) | Diffie–Hellman shared secret derivation ($S \equiv B^a \pmod p$) |
+| GET / POST | `/v1/math/dh/crack` | Configurable (Public or Basic Auth) | Diffie–Hellman discrete logarithm recovery via BSGS |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -61,7 +68,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -101,7 +108,21 @@ Response:
     "GET /v1/math/ecmul",
     "POST /v1/math/ecmul",
     "GET /v1/math/challenge",
-    "POST /v1/math/challenge"
+    "POST /v1/math/challenge",
+    "GET /v1/math/rsa/keygen",
+    "POST /v1/math/rsa/keygen",
+    "GET /v1/math/rsa/encrypt",
+    "POST /v1/math/rsa/encrypt",
+    "GET /v1/math/rsa/decrypt",
+    "POST /v1/math/rsa/decrypt",
+    "GET /v1/math/rsa/crack",
+    "POST /v1/math/rsa/crack",
+    "GET /v1/math/dh/keygen",
+    "POST /v1/math/dh/keygen",
+    "GET /v1/math/dh/derive",
+    "POST /v1/math/dh/derive",
+    "GET /v1/math/dh/crack",
+    "POST /v1/math/dh/crack"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -393,7 +414,7 @@ curl -sS -H "content-type: application/json" \
 ```
 
 #### 13. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, and `mixed`.
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, `rsa`, `dh`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"
@@ -412,6 +433,54 @@ curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legen
   ]
 }
 ```
+
+#### 14. Textbook RSA Cryptosystem (`/v1/math/rsa/*`)
+End-to-end toy RSA workflows with configurable key sizes ($8 \le \text{bits} \le 62$), standard encryption/decryption, Chinese Remainder Theorem (CRT) acceleration, and educational modulus factorization attacks via Pollard $\rho$.
+
+- **Key Generation (`/v1/math/rsa/keygen`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/rsa/keygen?bits=32&seed=42"
+  ```
+  Returns `p`, `q`, `n`, `e`, `d`, `phi`, `lambda`, `dp`, `dq`, and `qinv`.
+
+- **Encryption (`/v1/math/rsa/encrypt`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/rsa/encrypt?m=42&e=65537&n=3233"
+  ```
+  Computes $c \equiv m^e \pmod n$.
+
+- **Decryption (`/v1/math/rsa/decrypt`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/rsa/decrypt?c=2557&d=2753&n=3233&p=61&q=53"
+  ```
+  Decrypts $m \equiv c^d \pmod n$ with optional CRT speedup when factors $p$ and $q$ are provided.
+
+- **Modulus Factoring Attack (`/v1/math/rsa/crack`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/rsa/crack?n=3233&e=17&c=2557"
+  ```
+  Recovers $p$, $q$, $\lambda(n)$, and private exponent $d$, decrypting ciphertext $c$ if provided.
+
+#### 15. Diffie–Hellman Key Exchange (`/v1/math/dh/*`)
+Textbook Diffie–Hellman protocol over $\mathbb{F}_p^*$ with key generation, shared secret derivation, and discrete logarithm cryptanalysis via BSGS.
+
+- **Key Generation (`/v1/math/dh/keygen`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dh/keygen?p=23&g=5&private_key=6"
+  ```
+  Computes public key $A \equiv g^a \pmod p$ ($A = 8$).
+
+- **Shared Secret Derivation (`/v1/math/dh/derive`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dh/derive?private_key=6&peer_public_key=19&p=23"
+  ```
+  Computes shared secret $S \equiv B^a \pmod p$ ($S = 2$).
+
+- **Discrete Log Attack (`/v1/math/dh/crack`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dh/crack?g=5&public_key=8&p=23"
+  ```
+  Recovers private exponent $a = 6$ using the Baby-step Giant-step solver.
 
 ## Limits and status codes
 

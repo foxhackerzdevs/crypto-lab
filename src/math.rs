@@ -924,7 +924,7 @@ pub fn sigma(n: i64, k: u32) -> Result<i64, MathError> {
     sigma_from_factors(&factors, k)
 }
 
-// ------------------- Challenge / Quiz Generator -------------------
+// ------------------- Random Number Generator -------------------
 
 #[derive(Clone, Debug)]
 pub struct SimpleRng {
@@ -959,6 +959,389 @@ impl SimpleRng {
     }
 }
 
+// ------------------- Cryptosystems (RSA & Diffie-Hellman) -------------------
+
+pub fn generate_prime(bits: u32, rng: &mut SimpleRng) -> Result<i64, MathError> {
+    if bits < 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Prime bit length must be at least 2",
+        ));
+    }
+    if bits > 62 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Prime bit length must be at most 62",
+        ));
+    }
+    if bits == 2 {
+        return Ok(if rng.gen_range(0, 1) == 0 { 2 } else { 3 });
+    }
+    let low = 1i64 << (bits - 1);
+    let high = (1i64 << bits) - 1;
+    for _ in 0..10_000 {
+        let mut val = rng.gen_range(low, high);
+        val |= (1i64 << (bits - 1)) | 1;
+        if is_prime(val) {
+            return Ok(val);
+        }
+    }
+    Err(MathError(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to find prime within iteration limit",
+    ))
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RsaKeypair {
+    pub p: i64,
+    pub q: i64,
+    pub n: i64,
+    pub e: i64,
+    pub d: i64,
+    pub phi: i64,
+    pub lambda: i64,
+    pub dp: i64,
+    pub dq: i64,
+    pub qinv: i64,
+}
+
+pub fn rsa_keygen(bits: u32, e: i64, rng: &mut SimpleRng) -> Result<RsaKeypair, MathError> {
+    if bits < 8 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "RSA modulus bit length must be at least 8",
+        ));
+    }
+    if bits > 62 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "RSA modulus bit length must be at most 62",
+        ));
+    }
+    if e < 3 || e % 2 == 0 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Public exponent e must be an odd integer >= 3",
+        ));
+    }
+
+    let p_bits = bits / 2;
+    let q_bits = bits - p_bits;
+
+    for _ in 0..5000 {
+        let p_cand = generate_prime(p_bits, rng)?;
+        let q_cand = generate_prime(q_bits, rng)?;
+        if p_cand == q_cand {
+            continue;
+        }
+        let (p, q) = if p_cand < q_cand {
+            (q_cand, p_cand)
+        } else {
+            (p_cand, q_cand)
+        };
+        let n = p.checked_mul(q).ok_or(MathError(
+            StatusCode::BAD_REQUEST,
+            "modulus n integer overflow",
+        ))?;
+        let phi = (p - 1).checked_mul(q - 1).ok_or(MathError(
+            StatusCode::BAD_REQUEST,
+            "totient phi integer overflow",
+        ))?;
+        let (g, _, _) = egcd((p - 1) as i128, (q - 1) as i128);
+        let lam = phi / (g as i64);
+
+        let (ge, _, _) = egcd(e as i128, lam as i128);
+        if ge == 1 {
+            let d = mod_inv(e as i128, lam as i128).ok_or(MathError(
+                StatusCode::BAD_REQUEST,
+                "e has no inverse mod lambda",
+            ))? as i64;
+            let dp = (d as i128).rem_euclid((p - 1) as i128) as i64;
+            let dq = (d as i128).rem_euclid((q - 1) as i128) as i64;
+            let qinv = mod_inv(q as i128, p as i128)
+                .ok_or(MathError(StatusCode::BAD_REQUEST, "q has no inverse mod p"))?
+                as i64;
+            return Ok(RsaKeypair {
+                p,
+                q,
+                n,
+                e,
+                d,
+                phi,
+                lambda: lam,
+                dp,
+                dq,
+                qinv,
+            });
+        }
+    }
+
+    Err(MathError(
+        StatusCode::BAD_REQUEST,
+        "Failed to generate RSA key with given parameters",
+    ))
+}
+
+pub fn rsa_encrypt(m: i64, e: i64, n: i64) -> Result<i64, MathError> {
+    if n <= 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus n must be greater than 1",
+        ));
+    }
+    if e < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent e must be >= 1",
+        ));
+    }
+    if m < 0 || m >= n {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Message m must satisfy 0 <= m < n",
+        ));
+    }
+    Ok(mod_pow(m as i128, e as i128, n as i128) as i64)
+}
+
+pub fn rsa_decrypt(
+    c: i64,
+    d: i64,
+    n: i64,
+    p: Option<i64>,
+    q: Option<i64>,
+) -> Result<i64, MathError> {
+    if n <= 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus n must be greater than 1",
+        ));
+    }
+    if d < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent d must be >= 1",
+        ));
+    }
+    if c < 0 || c >= n {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Ciphertext c must satisfy 0 <= c < n",
+        ));
+    }
+    if p.is_some() != q.is_some() {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Both p and q must be provided for CRT acceleration, or neither",
+        ));
+    }
+
+    if let (Some(p_val), Some(q_val)) = (p, q) {
+        if p_val <= 1 || q_val <= 1 {
+            return Err(MathError(
+                StatusCode::BAD_REQUEST,
+                "Factors p and q must be greater than 1",
+            ));
+        }
+        if (p_val as i128) * (q_val as i128) != n as i128 {
+            return Err(MathError(
+                StatusCode::BAD_REQUEST,
+                "Invalid factors: p * q != n",
+            ));
+        }
+        let p128 = p_val as i128;
+        let q128 = q_val as i128;
+        let dp = (d as i128).rem_euclid(p128 - 1);
+        let dq = (d as i128).rem_euclid(q128 - 1);
+        let qinv = mod_inv(q128, p128).ok_or(MathError(
+            StatusCode::BAD_REQUEST,
+            "q has no modular inverse mod p",
+        ))?;
+        let m1 = mod_pow(c as i128, dp, p128);
+        let m2 = mod_pow(c as i128, dq, q128);
+        let h = (qinv * (m1 - m2)).rem_euclid(p128);
+        let m = m2 + h * q128;
+        return Ok(m as i64);
+    }
+
+    Ok(mod_pow(c as i128, d as i128, n as i128) as i64)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RsaCrackResult {
+    pub n: i64,
+    pub e: i64,
+    pub p: i64,
+    pub q: i64,
+    pub phi: i64,
+    pub lambda: i64,
+    pub d: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub m: Option<i64>,
+}
+
+pub fn rsa_crack(n: i64, e: i64, c: Option<i64>) -> Result<RsaCrackResult, MathError> {
+    if n <= 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus n must be greater than 1",
+        ));
+    }
+    if e < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent e must be >= 1",
+        ));
+    }
+    if let Some(c_val) = c {
+        if c_val < 0 || c_val >= n {
+            return Err(MathError(
+                StatusCode::BAD_REQUEST,
+                "Ciphertext c must satisfy 0 <= c < n",
+            ));
+        }
+    }
+
+    let factors = factorize(n)?;
+    let mut primes = Vec::new();
+    for f in &factors {
+        for _ in 0..f.power {
+            primes.push(f.prime);
+        }
+    }
+    if primes.len() != 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus n must be a product of exactly two primes",
+        ));
+    }
+    let (mut p, mut q) = (primes[0], primes[1]);
+    if p < q {
+        std::mem::swap(&mut p, &mut q);
+    }
+    let phi = (p - 1) * (q - 1);
+    let (g, _, _) = egcd((p - 1) as i128, (q - 1) as i128);
+    let lam = phi / (g as i64);
+    let (ge, _, _) = egcd(e as i128, lam as i128);
+    if ge != 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Cannot invert e modulo lambda(n)",
+        ));
+    }
+    let d = mod_inv(e as i128, lam as i128).ok_or(MathError(
+        StatusCode::BAD_REQUEST,
+        "Cannot invert e modulo lambda(n)",
+    ))? as i64;
+    let m = if let Some(c_val) = c {
+        Some(rsa_decrypt(c_val, d, n, Some(p), Some(q))?)
+    } else {
+        None
+    };
+    Ok(RsaCrackResult {
+        n,
+        e,
+        p,
+        q,
+        phi,
+        lambda: lam,
+        d,
+        c,
+        m,
+    })
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DhKeypair {
+    pub p: i64,
+    pub g: i64,
+    pub private_key: i64,
+    pub public_key: i64,
+}
+
+pub fn dh_keygen(
+    p: i64,
+    g: i64,
+    private_key: Option<i64>,
+    rng: &mut SimpleRng,
+) -> Result<DhKeypair, MathError> {
+    if p <= 2 || !is_prime(p) {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Diffie-Hellman modulus p must be a prime > 2",
+        ));
+    }
+    if g <= 1 || g >= p {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Generator g must satisfy 1 < g < p",
+        ));
+    }
+    let a = if let Some(priv_k) = private_key {
+        if priv_k < 2 || priv_k >= p - 1 {
+            return Err(MathError(
+                StatusCode::BAD_REQUEST,
+                "private_key must satisfy 2 <= private_key <= p-2",
+            ));
+        }
+        priv_k
+    } else {
+        rng.gen_range(2, p - 2)
+    };
+    let public_key = mod_pow(g as i128, a as i128, p as i128) as i64;
+    Ok(DhKeypair {
+        p,
+        g,
+        private_key: a,
+        public_key,
+    })
+}
+
+pub fn dh_derive(private_key: i64, peer_public_key: i64, p: i64) -> Result<i64, MathError> {
+    if p <= 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Modulus p must be greater than 2",
+        ));
+    }
+    if private_key < 1 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "private_key must be >= 1",
+        ));
+    }
+    if peer_public_key < 1 || peer_public_key >= p {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "peer_public_key must satisfy 1 <= key < p",
+        ));
+    }
+    Ok(mod_pow(peer_public_key as i128, private_key as i128, p as i128) as i64)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DhCrackResult {
+    pub g: i64,
+    pub public_key: i64,
+    pub p: i64,
+    pub private_key: i64,
+}
+
+pub fn dh_crack(g: i64, public_key: i64, p: i64) -> Result<DhCrackResult, MathError> {
+    let private_key = discrete_log(g, public_key, p)?;
+    Ok(DhCrackResult {
+        g,
+        public_key,
+        p,
+        private_key,
+    })
+}
+
+// ------------------- Challenge / Quiz Generator -------------------
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ChallengeProblem {
     pub topic: String,
@@ -969,7 +1352,8 @@ pub struct ChallengeProblem {
 pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengeProblem, MathError> {
     let selected_topic = if topic == "mixed" {
         let choices = [
-            "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog",
+            "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
+            "dh",
         ];
         *rng.choose(&choices)
     } else {
@@ -1095,9 +1479,72 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "rsa" => {
+            let primes = [3i64, 5, 7, 11, 13, 17, 19, 23];
+            let mut p = *rng.choose(&primes);
+            let mut q = *rng.choose(&primes);
+            while p == q {
+                q = *rng.choose(&primes);
+            }
+            if p < q {
+                std::mem::swap(&mut p, &mut q);
+            }
+            let n = p * q;
+            let phi = (p - 1) * (q - 1);
+            let e_candidates = [3i64, 5, 7, 11, 13, 17];
+            let valid_e: Vec<i64> = e_candidates
+                .iter()
+                .copied()
+                .filter(|&cand| {
+                    let (g, _, _) = egcd(cand as i128, phi as i128);
+                    g == 1
+                })
+                .collect();
+            let e = *rng.choose(&valid_e);
+            let m_max = (n - 1).min(15);
+            let m = rng.gen_range(2, m_max);
+            let c = mod_pow(m as i128, e as i128, n as i128) as i64;
+            Ok(ChallengeProblem {
+                topic: "rsa".to_string(),
+                question: f!("In RSA with e = {e} and n = {n}, find ciphertext c for message m = {m} (c ≡ m^{e} mod {n})"),
+                answer: c,
+            })
+        }
+        "dh" => {
+            let dh_params = [
+                (11i64, 2i64),
+                (13, 2),
+                (17, 3),
+                (19, 2),
+                (23, 5),
+                (29, 2),
+                (31, 3),
+                (41, 6),
+                (43, 3),
+            ];
+            let &(p, g) = rng.choose(&dh_params);
+            let a = rng.gen_range(2, 6);
+            if rng.gen_range(0, 1) == 0 {
+                let pub_a = mod_pow(g as i128, a as i128, p as i128) as i64;
+                Ok(ChallengeProblem {
+                    topic: "dh".to_string(),
+                    question: f!("In Diffie-Hellman with p = {p} and generator g = {g}, find public key A for private key a = {a} (A ≡ {g}^{a} mod {p})"),
+                    answer: pub_a,
+                })
+            } else {
+                let b = rng.gen_range(2, 6);
+                let pub_b = mod_pow(g as i128, b as i128, p as i128) as i64;
+                let s = mod_pow(pub_b as i128, a as i128, p as i128) as i64;
+                Ok(ChallengeProblem {
+                    topic: "dh".to_string(),
+                    question: f!("In Diffie-Hellman with p = {p}, Alice's private key is a = {a} and Bob's public key is B = {pub_b}. Find shared secret S (S ≡ {pub_b}^{a} mod {p})"),
+                    answer: s,
+                })
+            }
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, or mixed",
         )),
     }
 }
@@ -1353,5 +1800,92 @@ mod tests {
         assert_eq!(arithmetic_suite(30, 1).unwrap(), (-1, 72, 8));
         assert_eq!(arithmetic_suite(6, 2).unwrap(), (1, 50, 4));
         assert!(arithmetic_suite(0, 1).is_err());
+    }
+
+    #[test]
+    fn test_rsa() {
+        let mut rng = SimpleRng::new(12345);
+
+        // Prime generation
+        let prime_16 = generate_prime(16, &mut rng).unwrap();
+        assert!(is_prime(prime_16));
+        assert!(prime_16 >= 32768 && prime_16 < 65536);
+
+        // Keygen
+        let keys = rsa_keygen(32, 65537, &mut rng).unwrap();
+        assert_eq!(keys.p * keys.q, keys.n);
+        assert!(keys.p > keys.q);
+        assert_eq!(
+            ((keys.e as i128) * (keys.d as i128)).rem_euclid(keys.lambda as i128),
+            1
+        );
+
+        // Encrypt & Decrypt standard
+        let message = 42i64;
+        let c = rsa_encrypt(message, keys.e, keys.n).unwrap();
+        let decrypted = rsa_decrypt(c, keys.d, keys.n, None, None).unwrap();
+        assert_eq!(decrypted, message);
+
+        // Decrypt with CRT acceleration
+        let decrypted_crt = rsa_decrypt(c, keys.d, keys.n, Some(keys.p), Some(keys.q)).unwrap();
+        assert_eq!(decrypted_crt, message);
+
+        // Crack toy modulus
+        let cracked = rsa_crack(keys.n, keys.e, Some(c)).unwrap();
+        assert_eq!(cracked.p, keys.p);
+        assert_eq!(cracked.q, keys.q);
+        assert_eq!(cracked.d, keys.d);
+        assert_eq!(cracked.m, Some(message));
+
+        // Error cases
+        assert!(rsa_keygen(6, 65537, &mut rng).is_err());
+        assert!(rsa_keygen(32, 2, &mut rng).is_err());
+        assert!(rsa_keygen(32, 4, &mut rng).is_err());
+        assert!(rsa_encrypt(keys.n + 1, keys.e, keys.n).is_err());
+        assert!(rsa_decrypt(c, keys.d, keys.n, Some(keys.p), None).is_err());
+        assert!(rsa_decrypt(c, keys.d, keys.n, Some(keys.p), Some(keys.p)).is_err());
+    }
+
+    #[test]
+    fn test_dh() {
+        let mut rng = SimpleRng::new(54321);
+
+        // Alice generates keys
+        let alice = dh_keygen(23, 5, Some(6), &mut rng).unwrap();
+        assert_eq!(alice.private_key, 6);
+        assert_eq!(alice.public_key, 8); // 5^6 mod 23 = 8
+
+        // Bob generates keys with random private scalar
+        let bob = dh_keygen(23, 5, Some(15), &mut rng).unwrap();
+        assert_eq!(bob.private_key, 15);
+        assert_eq!(bob.public_key, 19); // 5^15 mod 23 = 19
+
+        // Derive shared secret
+        let s_alice = dh_derive(alice.private_key, bob.public_key, 23).unwrap();
+        let s_bob = dh_derive(bob.private_key, alice.public_key, 23).unwrap();
+        assert_eq!(s_alice, 2);
+        assert_eq!(s_bob, 2);
+
+        // Crack private key via discrete log
+        let cracked = dh_crack(5, alice.public_key, 23).unwrap();
+        assert_eq!(cracked.private_key, 6);
+
+        // Error cases
+        assert!(dh_keygen(24, 5, None, &mut rng).is_err()); // composite p
+        assert!(dh_keygen(23, 23, None, &mut rng).is_err()); // g >= p
+        assert!(dh_derive(0, 8, 23).is_err());
+        assert!(dh_derive(6, 25, 23).is_err());
+    }
+
+    #[test]
+    fn test_challenge_rsa_dh() {
+        let mut rng = SimpleRng::new(999);
+        let rsa_prob = generate_problem("rsa", &mut rng).unwrap();
+        assert_eq!(rsa_prob.topic, "rsa");
+        assert!(rsa_prob.question.contains("In RSA with"));
+
+        let dh_prob = generate_problem("dh", &mut rng).unwrap();
+        assert_eq!(dh_prob.topic, "dh");
+        assert!(dh_prob.question.contains("Diffie-Hellman"));
     }
 }
