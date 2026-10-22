@@ -1809,7 +1809,7 @@ mod tests {
         // Prime generation
         let prime_16 = generate_prime(16, &mut rng).unwrap();
         assert!(is_prime(prime_16));
-        assert!(prime_16 >= 32768 && prime_16 < 65536);
+        assert!((32768..65536).contains(&prime_16));
 
         // Keygen
         let keys = rsa_keygen(32, 65537, &mut rng).unwrap();
