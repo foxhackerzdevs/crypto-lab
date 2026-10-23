@@ -1,7 +1,11 @@
+mod fermat;
 mod math;
 
 use axum::{
-    extract::{DefaultBodyLimit, Json, Query},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        DefaultBodyLimit, Json, Query,
+    },
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -70,6 +74,9 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/dh/derive",
     "GET /v1/math/dh/crack",
     "POST /v1/math/dh/crack",
+    "GET /v1/math/fermat",
+    "POST /v1/math/fermat",
+    "GET /v1/math/chamber/ws",
 ];
 
 #[derive(Serialize)]
@@ -1233,6 +1240,345 @@ async fn math_dh_crack_post(
     handle_dh_crack(req)
 }
 
+fn deserialize_u128_flexible<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr {
+        U128(u128),
+        Str(String),
+    }
+
+    match NumOrStr::deserialize(deserializer)? {
+        NumOrStr::U128(v) => Ok(v),
+        NumOrStr::Str(s) => s.trim().parse::<u128>().map_err(serde::de::Error::custom),
+    }
+}
+
+#[derive(Deserialize)]
+struct FermatRequest {
+    #[serde(deserialize_with = "deserialize_u128_flexible")]
+    n: u128,
+    #[serde(default)]
+    max_steps: Option<u64>,
+    #[serde(default)]
+    record_steps: Option<bool>,
+}
+
+#[allow(clippy::manual_is_multiple_of)]
+fn handle_fermat(req: FermatRequest) -> Result<Json<fermat::FermatSummary>, ApiError> {
+    if req.n < 3 || req.n % 2 == 0 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "n must be an odd integer >= 3",
+        ));
+    }
+    let max_steps = req.max_steps.unwrap_or(1000).min(50_000);
+    let record_steps = req.record_steps.unwrap_or(true);
+    let summary = fermat::fermat_factor(req.n, max_steps, record_steps)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(summary))
+}
+
+async fn math_fermat_get(
+    Query(req): Query<FermatRequest>,
+) -> Result<Json<fermat::FermatSummary>, ApiError> {
+    handle_fermat(req)
+}
+
+async fn math_fermat_post(
+    Json(req): Json<FermatRequest>,
+) -> Result<Json<fermat::FermatSummary>, ApiError> {
+    handle_fermat(req)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum WsClientAction {
+    Start {
+        #[serde(deserialize_with = "deserialize_u128_flexible")]
+        n: u128,
+        #[serde(default)]
+        delay_ms: Option<u64>,
+        #[serde(default)]
+        max_steps: Option<u64>,
+    },
+    Pause,
+    Resume,
+    Step,
+    Speed {
+        delay_ms: u64,
+    },
+    Stop,
+}
+
+async fn handle_client_msg(
+    text: &str,
+    stepper: &mut Option<fermat::FermatStepper>,
+    is_paused: &mut bool,
+    delay_ms: &mut u64,
+    max_steps: &mut u64,
+    start_time: &mut std::time::Instant,
+    socket: &mut WebSocket,
+) {
+    let action: Result<WsClientAction, _> = serde_json::from_str(text);
+    match action {
+        Ok(WsClientAction::Start {
+            n,
+            delay_ms: d,
+            max_steps: m,
+        }) => match fermat::FermatStepper::new(n) {
+            Ok(st) => {
+                let initial_x = st.x;
+                *delay_ms = d.unwrap_or(50);
+                *max_steps = m.unwrap_or(1000).min(100_000);
+                *stepper = Some(st);
+                *is_paused = false;
+                *start_time = std::time::Instant::now();
+                let msg = serde_json::json!({
+                    "type": "start",
+                    "n": n,
+                    "initial_x": initial_x
+                });
+                let _ = socket.send(Message::Text(msg.to_string())).await;
+            }
+            Err(e) => {
+                let msg = serde_json::json!({
+                    "type": "error",
+                    "message": e
+                });
+                let _ = socket.send(Message::Text(msg.to_string())).await;
+            }
+        },
+        Ok(WsClientAction::Pause) => {
+            *is_paused = true;
+        }
+        Ok(WsClientAction::Resume) => {
+            *is_paused = false;
+        }
+        Ok(WsClientAction::Speed { delay_ms: d }) => {
+            *delay_ms = d;
+        }
+        Ok(WsClientAction::Stop) => {
+            *stepper = None;
+            let msg = serde_json::json!({
+                "type": "done",
+                "reason": "stopped",
+                "step": 0,
+                "elapsed_us": 0
+            });
+            let _ = socket.send(Message::Text(msg.to_string())).await;
+        }
+        Ok(WsClientAction::Step) => {
+            *is_paused = true;
+            if stepper.is_some() {
+                execute_single_step(stepper, start_time, socket).await;
+            }
+        }
+        Err(e) => {
+            let msg = serde_json::json!({
+                "type": "error",
+                "message": format!("Invalid message format: {e}")
+            });
+            let _ = socket.send(Message::Text(msg.to_string())).await;
+        }
+    }
+}
+
+async fn execute_single_step(
+    stepper_opt: &mut Option<fermat::FermatStepper>,
+    start_time: &std::time::Instant,
+    socket: &mut WebSocket,
+) {
+    let outcome = match stepper_opt.as_mut() {
+        Some(st) => st.next_step(),
+        None => return,
+    };
+
+    match outcome {
+        fermat::StepOutcome::Step(rec) => {
+            let msg = serde_json::json!({
+                "type": "step",
+                "step": rec.step,
+                "x": rec.x,
+                "r": rec.r,
+                "sieve_passed": rec.sieve_passed,
+                "rejected_by": rec.rejected_by,
+                "is_square": rec.is_square
+            });
+            let _ = socket.send(Message::Text(msg.to_string())).await;
+        }
+        fermat::StepOutcome::Found {
+            step,
+            x,
+            y,
+            p,
+            q,
+            record,
+        } => {
+            let elapsed_us = start_time.elapsed().as_micros();
+            let cand_msg = serde_json::json!({
+                "type": "candidate",
+                "step": record.step,
+                "x": record.x,
+                "r": record.r,
+                "sieve_passed": record.sieve_passed,
+                "is_square": record.is_square,
+                "y": record.y
+            });
+            let _ = socket.send(Message::Text(cand_msg.to_string())).await;
+            let found_msg = serde_json::json!({
+                "type": "found",
+                "step": step,
+                "x": x,
+                "y": y,
+                "p": p,
+                "q": q,
+                "elapsed_us": elapsed_us
+            });
+            let _ = socket.send(Message::Text(found_msg.to_string())).await;
+            let done_msg = serde_json::json!({
+                "type": "done",
+                "reason": "found",
+                "step": step,
+                "p": p,
+                "q": q,
+                "elapsed_us": elapsed_us
+            });
+            let _ = socket.send(Message::Text(done_msg.to_string())).await;
+            *stepper_opt = None;
+        }
+        fermat::StepOutcome::Trivial {
+            step, p, q, record, ..
+        } => {
+            let elapsed_us = start_time.elapsed().as_micros();
+            let cand_msg = serde_json::json!({
+                "type": "candidate",
+                "step": record.step,
+                "x": record.x,
+                "r": record.r,
+                "sieve_passed": record.sieve_passed,
+                "is_square": record.is_square,
+                "y": record.y
+            });
+            let _ = socket.send(Message::Text(cand_msg.to_string())).await;
+            let done_msg = serde_json::json!({
+                "type": "done",
+                "reason": "trivial",
+                "step": step,
+                "p": p,
+                "q": q,
+                "elapsed_us": elapsed_us
+            });
+            let _ = socket.send(Message::Text(done_msg.to_string())).await;
+            *stepper_opt = None;
+        }
+        fermat::StepOutcome::DoneMaxX { step, .. } => {
+            let elapsed_us = start_time.elapsed().as_micros();
+            let done_msg = serde_json::json!({
+                "type": "done",
+                "reason": "exhausted",
+                "step": step,
+                "elapsed_us": elapsed_us
+            });
+            let _ = socket.send(Message::Text(done_msg.to_string())).await;
+            *stepper_opt = None;
+        }
+        fermat::StepOutcome::Overflow => {
+            let elapsed_us = start_time.elapsed().as_micros();
+            let step = stepper_opt.as_ref().map(|s| s.step).unwrap_or(0);
+            let done_msg = serde_json::json!({
+                "type": "done",
+                "reason": "overflow",
+                "step": step,
+                "elapsed_us": elapsed_us
+            });
+            let _ = socket.send(Message::Text(done_msg.to_string())).await;
+            *stepper_opt = None;
+        }
+        fermat::StepOutcome::AlreadyFinished => {
+            *stepper_opt = None;
+        }
+    }
+}
+
+async fn chamber_ws_handler(ws: WebSocketUpgrade) -> Response {
+    ws.on_upgrade(handle_chamber_socket)
+}
+
+async fn handle_chamber_socket(mut socket: WebSocket) {
+    let mut stepper: Option<fermat::FermatStepper> = None;
+    let mut is_paused = false;
+    let mut delay_ms: u64 = 50;
+    let mut max_steps: u64 = 1000;
+    let mut start_time = std::time::Instant::now();
+
+    loop {
+        if stepper.is_none() || is_paused {
+            match socket.recv().await {
+                Some(Ok(Message::Text(text))) => {
+                    handle_client_msg(
+                        &text,
+                        &mut stepper,
+                        &mut is_paused,
+                        &mut delay_ms,
+                        &mut max_steps,
+                        &mut start_time,
+                        &mut socket,
+                    )
+                    .await;
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                _ => {}
+            }
+        } else {
+            let sleep_duration = tokio::time::Duration::from_millis(delay_ms.max(1));
+            tokio::select! {
+                incoming = socket.recv() => {
+                    match incoming {
+                        Some(Ok(Message::Text(text))) => {
+                            handle_client_msg(
+                                &text,
+                                &mut stepper,
+                                &mut is_paused,
+                                &mut delay_ms,
+                                &mut max_steps,
+                                &mut start_time,
+                                &mut socket,
+                            ).await;
+                        }
+                        Some(Ok(Message::Close(_))) | None => break,
+                        _ => {}
+                    }
+                }
+                _ = tokio::time::sleep(sleep_duration) => {
+                    let should_stop = match stepper.as_ref() {
+                        Some(st) => st.step >= max_steps,
+                        None => true,
+                    };
+
+                    if should_stop {
+                        let step = stepper.as_ref().map(|s| s.step).unwrap_or(0);
+                        let elapsed_us = start_time.elapsed().as_micros();
+                        let msg = serde_json::json!({
+                            "type": "done",
+                            "reason": "max_steps",
+                            "step": step,
+                            "elapsed_us": elapsed_us
+                        });
+                        let _ = socket.send(Message::Text(msg.to_string())).await;
+                        stepper = None;
+                    } else {
+                        execute_single_step(&mut stepper, &start_time, &mut socket).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn app() -> Router {
     Router::new()
         .route("/health", get(health))
@@ -1309,6 +1655,11 @@ fn app() -> Router {
             "/v1/math/dh/crack",
             get(math_dh_crack_get).post(math_dh_crack_post),
         )
+        .route(
+            "/v1/math/fermat",
+            get(math_fermat_get).post(math_fermat_post),
+        )
+        .route("/v1/math/chamber/ws", get(chamber_ws_handler))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1397,7 +1748,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 53);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 56);
     }
 
     #[tokio::test]
@@ -2173,5 +2524,59 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body_chal_dh["topic"], "dh");
+    }
+
+    #[tokio::test]
+    async fn tests_fermat_endpoints() {
+        // Fermat GET with n=5959
+        let (status, body) = json_response(
+            Request::get("/v1/math/fermat?n=5959")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["found"], true);
+        assert_eq!(body["steps_count"], 3);
+        assert_eq!(body["x"], 80);
+        assert_eq!(body["y"], 21);
+        let p = body["p"].as_u64().unwrap();
+        let q = body["q"].as_u64().unwrap();
+        assert_eq!(p * q, 5959);
+
+        // Fermat POST with string n="8051"
+        let (status, body_post) = json_response(
+            Request::post("/v1/math/fermat")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n":"8051","max_steps":100}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_post["found"], true);
+        let p = body_post["p"].as_u64().unwrap();
+        let q = body_post["q"].as_u64().unwrap();
+        assert_eq!(p * q, 8051);
+
+        // Fermat rejection of even number
+        let (status, body_err) = json_response(
+            Request::get("/v1/math/fermat?n=18")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body_err["error"].as_str().unwrap().contains("odd integer"));
+
+        // Check /v1/info endpoints and version
+        let (status, info_body) =
+            json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(info_body["version"], "0.8.0");
+        let endpoints = info_body["endpoints"].as_array().unwrap();
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
     }
 }
