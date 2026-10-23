@@ -485,7 +485,7 @@ Textbook Diffie–Hellman protocol over $\mathbb{F}_p^*$ with key generation, sh
   Recovers private exponent $a = 6$ using the Baby-step Giant-step solver.
 
 #### 16. Fermat's Difference of Squares & The Chamber of Primes (`/v1/math/fermat`, `/v1/math/chamber/ws`)
-Fermat's difference of squares method expresses an odd composite integer $n$ as $n = x^2 - y^2 = (x - y)(x + y)$. Starting at $x = \lceil\sqrt{n}\rceil$, each attempt checks if $r = x^2 - n$ is a quadratic residue using a precomputed Legendre symbol sieve across small primes ($3, 5, 7, \dots, 73$), eliminating $>99.999\%$ of non-squares in $O(1)$ operations before evaluating an exact integer square root.
+Fermat's difference of squares method expresses an odd composite integer $n$ as $n = x^2 - y^2 = (x - y)(x + y)$. Starting at $x = \lceil\sqrt{n}\rceil$, each attempt checks if $r = x^2 - n$ is a quadratic residue using a precomputed Legendre symbol sieve across 20 small primes ($3, 5, 7, \dots, 73$), eliminating $>99.999\%$ of non-squares in $O(1)$ operations before evaluating an exact integer square root.
 
 - **REST Factorization (`/v1/math/fermat`)**:
   ```bash
