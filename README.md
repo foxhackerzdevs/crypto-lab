@@ -51,7 +51,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/dh/keygen` | Configurable (Public or Basic Auth) | Diffie–Hellman keypair generation ($A \equiv g^a \pmod p$) |
 | GET / POST | `/v1/math/dh/derive` | Configurable (Public or Basic Auth) | Diffie–Hellman shared secret derivation ($S \equiv B^a \pmod p$) |
 | GET / POST | `/v1/math/dh/crack` | Configurable (Public or Basic Auth) | Diffie–Hellman discrete logarithm recovery via BSGS |
-| GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization ($n = x^2 - y^2$) with Legendre quadratic residue sieve |
+| GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization ($n = x^2 - y^2 = (x-y)(x+y)$) with Legendre quadratic residue sieve |
 | GET (WS) | `/v1/math/chamber/ws` | Configurable (Public or Basic Auth) | WebSocket stream for real-time Fermat factorization visualization ("The Chamber of Primes") |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
@@ -485,7 +485,13 @@ Textbook Diffie–Hellman protocol over $\mathbb{F}_p^*$ with key generation, sh
   Recovers private exponent $a = 6$ using the Baby-step Giant-step solver.
 
 #### 16. Fermat's Difference of Squares & The Chamber of Primes (`/v1/math/fermat`, `/v1/math/chamber/ws`)
-Fermat's difference of squares method expresses an odd composite integer $n$ as $n = x^2 - y^2 = (x - y)(x + y)$. Starting at $x = \lceil\sqrt{n}\rceil$, each attempt checks if $r = x^2 - n$ is a quadratic residue using a precomputed Legendre symbol sieve across 20 small primes ($3, 5, 7, \dots, 73$), eliminating $>99.999\%$ of non-squares in $O(1)$ operations before evaluating an exact integer square root.
+Fermat's difference of squares method expresses an odd composite integer $n$ as:
+
+$$
+n = x^2 - y^2 = (x - y)(x + y)
+$$
+
+Starting at $x = \lceil\sqrt{n}\rceil$, each attempt checks if $r = x^2 - n$ is a quadratic residue using a precomputed Legendre symbol sieve across 20 small primes ($3, 5, 7, \dots, 73$), eliminating $>99.999\%$ of non-squares in $O(1)$ operations before evaluating an exact integer square root.
 
 - **REST Factorization (`/v1/math/fermat`)**:
   ```bash
