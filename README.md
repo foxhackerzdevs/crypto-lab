@@ -51,7 +51,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/dh/keygen` | Configurable (Public or Basic Auth) | Diffie–Hellman keypair generation ($A \equiv g^a \pmod p$) |
 | GET / POST | `/v1/math/dh/derive` | Configurable (Public or Basic Auth) | Diffie–Hellman shared secret derivation ($S \equiv B^a \pmod p$) |
 | GET / POST | `/v1/math/dh/crack` | Configurable (Public or Basic Auth) | Diffie–Hellman discrete logarithm recovery via BSGS |
-| GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization ($n = x^2 - y^2 = (x-y)(x+y)$) with Legendre quadratic residue sieve |
+| GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization (n = x² − y² = (x − y)(x + y)) with Legendre quadratic residue sieve |
 | GET (WS) | `/v1/math/chamber/ws` | Configurable (Public or Basic Auth) | WebSocket stream for real-time Fermat factorization visualization ("The Chamber of Primes") |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
