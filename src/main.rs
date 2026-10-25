@@ -77,6 +77,10 @@ const ENDPOINTS: &[&str] = &[
     "GET /v1/math/fermat",
     "POST /v1/math/fermat",
     "GET /v1/math/chamber/ws",
+    "GET /v1/math/mersenne",
+    "POST /v1/math/mersenne",
+    "GET /v1/math/perfect",
+    "POST /v1/math/perfect",
 ];
 
 #[derive(Serialize)]
@@ -493,6 +497,39 @@ struct DhCrackResponse {
     public_key: i64,
     p: i64,
     private_key: i64,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct MersenneRequest {
+    p: Option<u32>,
+    limit: Option<u32>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+enum MersenneResponse {
+    Single(math::MersenneInfo),
+    List { limit: u32, primes: Vec<u32> },
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct PerfectRequest {
+    n: Option<i64>,
+    p: Option<u32>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+struct PerfectResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    is_perfect: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sigma: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    perfect_number: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1294,6 +1331,72 @@ async fn math_fermat_post(
     handle_fermat(req)
 }
 
+fn handle_mersenne(req: MersenneRequest) -> Result<Json<MersenneResponse>, ApiError> {
+    if let Some(p) = req.p {
+        let info = math::mersenne_info(p)?;
+        Ok(Json(MersenneResponse::Single(info)))
+    } else {
+        let limit = req.limit.unwrap_or(127).min(5000);
+        let primes = math::mersenne_primes(limit);
+        Ok(Json(MersenneResponse::List { limit, primes }))
+    }
+}
+
+async fn math_mersenne_get(
+    Query(req): Query<MersenneRequest>,
+) -> Result<Json<MersenneResponse>, ApiError> {
+    handle_mersenne(req)
+}
+
+async fn math_mersenne_post(
+    Json(req): Json<MersenneRequest>,
+) -> Result<Json<MersenneResponse>, ApiError> {
+    handle_mersenne(req)
+}
+
+fn handle_perfect(req: PerfectRequest) -> Result<Json<PerfectResponse>, ApiError> {
+    if req.n.is_none() && req.p.is_none() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Either n (to test if n is perfect) or p (to generate perfect number for prime exponent p) must be provided",
+        ));
+    }
+
+    let mut resp = PerfectResponse {
+        n: req.n,
+        is_perfect: None,
+        sigma: None,
+        p: req.p,
+        perfect_number: None,
+    };
+
+    if let Some(n) = req.n {
+        let is_p = math::is_perfect(n);
+        let sig = math::sigma(n, 1).ok();
+        resp.is_perfect = Some(is_p);
+        resp.sigma = sig;
+    }
+
+    if let Some(p) = req.p {
+        let perf = math::perfect_number(p)?;
+        resp.perfect_number = Some(perf);
+    }
+
+    Ok(Json(resp))
+}
+
+async fn math_perfect_get(
+    Query(req): Query<PerfectRequest>,
+) -> Result<Json<PerfectResponse>, ApiError> {
+    handle_perfect(req)
+}
+
+async fn math_perfect_post(
+    Json(req): Json<PerfectRequest>,
+) -> Result<Json<PerfectResponse>, ApiError> {
+    handle_perfect(req)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WsClientAction {
@@ -1660,6 +1763,14 @@ fn app() -> Router {
             get(math_fermat_get).post(math_fermat_post),
         )
         .route("/v1/math/chamber/ws", get(chamber_ws_handler))
+        .route(
+            "/v1/math/mersenne",
+            get(math_mersenne_get).post(math_mersenne_post),
+        )
+        .route(
+            "/v1/math/perfect",
+            get(math_perfect_get).post(math_perfect_post),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1748,7 +1859,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 56);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 60);
     }
 
     #[tokio::test]
@@ -2573,10 +2684,121 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.8.0");
+        assert_eq!(info_body["version"], "0.9.0");
         let endpoints = info_body["endpoints"].as_array().unwrap();
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/mersenne"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/mersenne"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/perfect"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/perfect"));
+    }
+
+    #[tokio::test]
+    async fn tests_mersenne_and_perfect_endpoints() {
+        // Mersenne GET p=7
+        let (status, body) = json_response(
+            Request::get("/v1/math/mersenne?p=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["p"], 7);
+        assert_eq!(body["mp"], "127");
+        assert_eq!(body["p_is_prime"], true);
+        assert_eq!(body["is_prime"], true);
+        assert_eq!(body["perfect_number"], "8128");
+
+        // Mersenne POST p=11
+        let (status, body_p11) = json_response(
+            Request::post("/v1/math/mersenne")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"p": 11}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_p11["p"], 11);
+        assert_eq!(body_p11["is_prime"], false);
+        assert!(body_p11.get("perfect_number").is_none());
+
+        // Mersenne primes list GET limit=31
+        let (status, body_list) = json_response(
+            Request::get("/v1/math/mersenne?limit=31")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_list["limit"], 31);
+        let primes = body_list["primes"].as_array().unwrap();
+        assert_eq!(primes, &vec![2, 3, 5, 7, 13, 17, 19, 31]);
+
+        // Perfect GET n=28
+        let (status, body_perf) = json_response(
+            Request::get("/v1/math/perfect?n=28")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_perf["n"], 28);
+        assert_eq!(body_perf["is_perfect"], true);
+        assert_eq!(body_perf["sigma"], 56);
+
+        // Perfect POST p=5
+        let (status, body_perf_p) = json_response(
+            Request::post("/v1/math/perfect")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"p": 5}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_perf_p["p"], 5);
+        assert_eq!(body_perf_p["perfect_number"], "496");
+
+        // Perfect both n and p
+        let (status, body_both) = json_response(
+            Request::get("/v1/math/perfect?n=6&p=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_both["n"], 6);
+        assert_eq!(body_both["is_perfect"], true);
+        assert_eq!(body_both["perfect_number"], "6");
+
+        // Perfect error: neither n nor p provided
+        let (status, body_err) = json_response(
+            Request::get("/v1/math/perfect")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body_err["error"].as_str().unwrap().contains("Either n"));
+
+        // Challenge Mersenne & Perfect topics
+        let (status, body_chal_m) = json_response(
+            Request::get("/v1/math/challenge?topic=mersenne&seed=123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_chal_m["topic"], "mersenne");
+
+        let (status, body_chal_p) = json_response(
+            Request::get("/v1/math/challenge?topic=perfect&seed=456")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_chal_p["topic"], "perfect");
     }
 }

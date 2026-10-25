@@ -1353,7 +1353,7 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
     let selected_topic = if topic == "mixed" {
         let choices = [
             "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
-            "dh",
+            "dh", "mersenne", "perfect",
         ];
         *rng.choose(&choices)
     } else {
@@ -1542,11 +1542,398 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 })
             }
         }
+        "mersenne" => {
+            let candidates = [2, 3, 5, 7, 11, 13, 17, 19, 23, 31];
+            let &p = rng.choose(&candidates);
+            if rng.gen_range(0, 1) == 0 {
+                let ans = if lucas_lehmer(p).unwrap_or(false) { 1 } else { 0 };
+                Ok(ChallengeProblem {
+                    topic: "mersenne".to_string(),
+                    question: f!("Is Mersenne number M_{p} = 2^{p} - 1 prime? (1 for Yes, 0 for No)"),
+                    answer: ans,
+                })
+            } else {
+                let small_candidates = [2, 3, 5, 7, 13];
+                let &sp = rng.choose(&small_candidates);
+                let mp = (1i64 << sp) - 1;
+                Ok(ChallengeProblem {
+                    topic: "mersenne".to_string(),
+                    question: f!("Compute the value of Mersenne number M_{sp} = 2^{sp} - 1"),
+                    answer: mp,
+                })
+            }
+        }
+        "perfect" => {
+            let candidates = [6, 12, 28, 40, 496, 500, 8128];
+            let &n = rng.choose(&candidates);
+            let ans = if is_perfect(n) { 1 } else { 0 };
+            Ok(ChallengeProblem {
+                topic: "perfect".to_string(),
+                question: f!("Is {n} a perfect number (sum of proper divisors equals n)? (1 for Yes, 0 for No)"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, or mixed",
         )),
     }
+}
+
+// ------------------- Mersenne Numbers & Lucas-Lehmer Primality Test -------------------
+
+use std::cmp::Ordering;
+
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct BigUint {
+    pub digits: Vec<u32>, // Little-endian base 2^32, trimmed
+}
+
+impl Ord for BigUint {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.digits.len() != other.digits.len() {
+            return self.digits.len().cmp(&other.digits.len());
+        }
+        for (a, b) in self.digits.iter().rev().zip(other.digits.iter().rev()) {
+            if a != b {
+                return a.cmp(b);
+            }
+        }
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for BigUint {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl BigUint {
+    pub fn zero() -> Self {
+        BigUint { digits: Vec::new() }
+    }
+
+    pub fn from_u64(mut val: u64) -> Self {
+        let mut digits = Vec::new();
+        while val > 0 {
+            digits.push((val & 0xFFFF_FFFF) as u32);
+            val >>= 32;
+        }
+        BigUint { digits }
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.digits.is_empty()
+    }
+
+    pub fn trim(&mut self) {
+        while let Some(&0) = self.digits.last() {
+            self.digits.pop();
+        }
+    }
+
+    pub fn mersenne(p: u32) -> Self {
+        if p == 0 {
+            return Self::zero();
+        }
+        let full_limbs = (p / 32) as usize;
+        let rem_bits = p % 32;
+        let mut digits = vec![0xFFFF_FFFFu32; full_limbs];
+        if rem_bits > 0 {
+            digits.push(((1u64 << rem_bits) - 1) as u32);
+        }
+        let mut res = BigUint { digits };
+        res.trim();
+        res
+    }
+
+    pub fn perfect_number(p: u32) -> Self {
+        let m = Self::mersenne(p);
+        m.shl((p - 1) as usize)
+    }
+
+    pub fn add(&self, other: &Self) -> Self {
+        let max_len = self.digits.len().max(other.digits.len());
+        let mut res = Vec::with_capacity(max_len + 1);
+        let mut carry = 0u64;
+        for i in 0..max_len {
+            let a = self.digits.get(i).copied().unwrap_or(0) as u64;
+            let b = other.digits.get(i).copied().unwrap_or(0) as u64;
+            let sum = a + b + carry;
+            res.push((sum & 0xFFFF_FFFF) as u32);
+            carry = sum >> 32;
+        }
+        if carry > 0 {
+            res.push(carry as u32);
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        r
+    }
+
+    pub fn sub(&self, other: &Self) -> Option<Self> {
+        if self < other {
+            return None;
+        }
+        let mut res = Vec::with_capacity(self.digits.len());
+        let mut borrow = 0i64;
+        for i in 0..self.digits.len() {
+            let a = self.digits[i] as i64;
+            let b = other.digits.get(i).copied().unwrap_or(0) as i64;
+            let diff = a - b - borrow;
+            if diff < 0 {
+                res.push((diff + 0x1_0000_0000) as u32);
+                borrow = 1;
+            } else {
+                res.push(diff as u32);
+                borrow = 0;
+            }
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        Some(r)
+    }
+
+    pub fn mul(&self, other: &Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+        let mut res = vec![0u32; self.digits.len() + other.digits.len()];
+        for (i, &a) in self.digits.iter().enumerate() {
+            let mut carry = 0u64;
+            for (j, &b) in other.digits.iter().enumerate() {
+                let cur = res[i + j] as u64 + (a as u64) * (b as u64) + carry;
+                res[i + j] = (cur & 0xFFFF_FFFF) as u32;
+                carry = cur >> 32;
+            }
+            if carry > 0 {
+                res[i + other.digits.len()] += carry as u32;
+            }
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        r
+    }
+
+    pub fn shl(&self, shift: usize) -> Self {
+        if self.is_zero() || shift == 0 {
+            return self.clone();
+        }
+        let limb_shift = shift / 32;
+        let bit_shift = shift % 32;
+        let mut res = vec![0u32; limb_shift];
+        let mut carry = 0u64;
+        for &d in &self.digits {
+            let cur = ((d as u64) << bit_shift) | carry;
+            res.push((cur & 0xFFFF_FFFF) as u32);
+            carry = cur >> 32;
+        }
+        if carry > 0 {
+            res.push(carry as u32);
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        r
+    }
+
+    pub fn shr(&self, shift: usize) -> Self {
+        if self.is_zero() || shift == 0 {
+            return self.clone();
+        }
+        let limb_shift = shift / 32;
+        let bit_shift = shift % 32;
+        if limb_shift >= self.digits.len() {
+            return Self::zero();
+        }
+        let sliced = &self.digits[limb_shift..];
+        if bit_shift == 0 {
+            let mut r = BigUint { digits: sliced.to_vec() };
+            r.trim();
+            return r;
+        }
+        let mut res = Vec::with_capacity(sliced.len());
+        for i in 0..sliced.len() {
+            let cur = sliced[i] as u64 >> bit_shift;
+            let next = if i + 1 < sliced.len() { (sliced[i + 1] as u64) << (32 - bit_shift) } else { 0 };
+            res.push(((cur | next) & 0xFFFF_FFFF) as u32);
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        r
+    }
+
+    pub fn mask_bits(&self, bits: usize) -> Self {
+        if self.is_zero() || bits == 0 {
+            return Self::zero();
+        }
+        let limb_count = bits / 32;
+        let rem_bits = bits % 32;
+        let mut res = Vec::new();
+        for i in 0..limb_count {
+            if i < self.digits.len() {
+                res.push(self.digits[i]);
+            }
+        }
+        if rem_bits > 0 && limb_count < self.digits.len() {
+            let mask = ((1u64 << rem_bits) - 1) as u32;
+            res.push(self.digits[limb_count] & mask);
+        }
+        let mut r = BigUint { digits: res };
+        r.trim();
+        r
+    }
+
+    #[allow(clippy::inherent_to_string)]
+    pub fn to_string(&self) -> String {
+        if self.is_zero() {
+            return "0".to_string();
+        }
+        let mut temp = self.clone();
+        let mut chunks = Vec::new();
+        let divisor = 1_000_000_000u64;
+        while !temp.is_zero() {
+            let mut rem = 0u64;
+            for d in temp.digits.iter_mut().rev() {
+                let cur = (rem << 32) | (*d as u64);
+                *d = (cur / divisor) as u32;
+                rem = cur % divisor;
+            }
+            temp.trim();
+            chunks.push(rem);
+        }
+        let mut s = String::new();
+        let last = chunks.pop().unwrap();
+        s.push_str(&last.to_string());
+        for rem in chunks.into_iter().rev() {
+            use std::fmt::Write;
+            write!(&mut s, "{:09}", rem).unwrap();
+        }
+        s
+    }
+}
+
+#[allow(clippy::manual_is_multiple_of)]
+pub fn lucas_lehmer(p: u32) -> Result<bool, MathError> {
+    if p < 2 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+    }
+    if p > 5000 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+    }
+    if p == 2 {
+        return Ok(true);
+    }
+    if p % 2 == 0 || !is_prime(p as i64) {
+        return Ok(false);
+    }
+
+    let mp = BigUint::mersenne(p);
+    let two = BigUint::from_u64(2);
+    let mut s = BigUint::from_u64(4);
+
+    for _ in 0..(p - 2) {
+        let sq = s.mul(&s);
+        let high = sq.shr(p as usize);
+        let low = sq.mask_bits(p as usize);
+        let mut rem = high.add(&low);
+        if rem >= mp {
+            rem = rem.sub(&mp).unwrap();
+        }
+        if rem >= two {
+            rem = rem.sub(&two).unwrap();
+        } else {
+            rem = rem.add(&mp).sub(&two).unwrap();
+        }
+        if rem >= mp {
+            rem = rem.sub(&mp).unwrap();
+        }
+        s = rem;
+    }
+
+    Ok(s.is_zero())
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MersenneInfo {
+    pub p: u32,
+    pub mp: String,
+    pub p_is_prime: bool,
+    pub is_prime: bool,
+    pub bits: u32,
+    pub digits: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub perfect_number: Option<String>,
+}
+
+pub fn mersenne_info(p: u32) -> Result<MersenneInfo, MathError> {
+    if p < 2 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+    }
+    if p > 5000 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+    }
+
+    let p_is_prime = is_prime(p as i64);
+    let is_m_prime = if p_is_prime { lucas_lehmer(p)? } else { false };
+    let mp_big = BigUint::mersenne(p);
+    let mp_str = mp_big.to_string();
+    let digits = mp_str.len();
+    let perfect_number = if is_m_prime {
+        Some(BigUint::perfect_number(p).to_string())
+    } else {
+        None
+    };
+
+    Ok(MersenneInfo {
+        p,
+        mp: mp_str,
+        p_is_prime,
+        is_prime: is_m_prime,
+        bits: p,
+        digits,
+        perfect_number,
+    })
+}
+
+pub fn mersenne_primes(limit_p: u32) -> Vec<u32> {
+    let limit = limit_p.min(5000);
+    if limit < 2 {
+        return Vec::new();
+    }
+    let mut primes = Vec::new();
+    for p in 2..=limit {
+        if is_prime(p as i64) && lucas_lehmer(p).unwrap_or(false) {
+            primes.push(p);
+        }
+    }
+    primes
+}
+
+pub fn is_perfect(n: i64) -> bool {
+    if n <= 1 {
+        return false;
+    }
+    match sigma(n, 1) {
+        Ok(s) => s == 2 * n,
+        Err(_) => false,
+    }
+}
+
+pub fn perfect_number(p: u32) -> Result<String, MathError> {
+    if p < 2 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+    }
+    if p > 5000 {
+        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+    }
+    if !lucas_lehmer(p)? {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Mersenne number 2^p - 1 is not prime; no even perfect number corresponds to this exponent",
+        ));
+    }
+    Ok(BigUint::perfect_number(p).to_string())
 }
 
 // Simple macro for format string to avoid pulling extra dependencies
@@ -1887,5 +2274,74 @@ mod tests {
         let dh_prob = generate_problem("dh", &mut rng).unwrap();
         assert_eq!(dh_prob.topic, "dh");
         assert!(dh_prob.question.contains("Diffie-Hellman"));
+    }
+
+    #[test]
+    fn test_mersenne_and_perfect() {
+        assert_eq!(lucas_lehmer(2), Ok(true));
+        assert_eq!(lucas_lehmer(3), Ok(true));
+        assert_eq!(lucas_lehmer(5), Ok(true));
+        assert_eq!(lucas_lehmer(7), Ok(true));
+        assert_eq!(lucas_lehmer(11), Ok(false));
+        assert_eq!(lucas_lehmer(13), Ok(true));
+        assert_eq!(lucas_lehmer(17), Ok(true));
+        assert_eq!(lucas_lehmer(19), Ok(true));
+        assert_eq!(lucas_lehmer(23), Ok(false));
+        assert_eq!(lucas_lehmer(31), Ok(true));
+        assert_eq!(lucas_lehmer(61), Ok(true));
+        assert_eq!(lucas_lehmer(127), Ok(true));
+
+        // Error cases
+        assert!(lucas_lehmer(1).is_err());
+        assert!(lucas_lehmer(6000).is_err());
+
+        // Mersenne info
+        let m7 = mersenne_info(7).unwrap();
+        assert_eq!(m7.p, 7);
+        assert_eq!(m7.mp, "127");
+        assert!(m7.p_is_prime);
+        assert!(m7.is_prime);
+        assert_eq!(m7.digits, 3);
+        assert_eq!(m7.perfect_number.as_deref(), Some("8128"));
+
+        let m11 = mersenne_info(11).unwrap();
+        assert_eq!(m11.p, 11);
+        assert_eq!(m11.mp, "2047");
+        assert!(m11.p_is_prime);
+        assert!(!m11.is_prime);
+        assert_eq!(m11.perfect_number, None);
+
+        // Euclid-Euler perfect numbers
+        assert!(is_perfect(6));
+        assert!(is_perfect(28));
+        assert!(is_perfect(496));
+        assert!(is_perfect(8128));
+        assert!(!is_perfect(12));
+        assert!(!is_perfect(1));
+        assert!(!is_perfect(0));
+        assert!(!is_perfect(-28));
+
+        assert_eq!(perfect_number(2).unwrap(), "6");
+        assert_eq!(perfect_number(3).unwrap(), "28");
+        assert_eq!(perfect_number(5).unwrap(), "496");
+        assert_eq!(perfect_number(7).unwrap(), "8128");
+        assert_eq!(perfect_number(31).unwrap(), "2305843008139952128");
+        assert!(perfect_number(11).is_err());
+
+        // Mersenne primes list
+        let primes_31 = mersenne_primes(31);
+        assert_eq!(primes_31, vec![2, 3, 5, 7, 13, 17, 19, 31]);
+    }
+
+    #[test]
+    fn test_challenge_mersenne_perfect() {
+        let mut rng = SimpleRng::new(42);
+        let prob_m = generate_problem("mersenne", &mut rng).unwrap();
+        assert_eq!(prob_m.topic, "mersenne");
+        assert!(prob_m.question.contains("Mersenne"));
+
+        let prob_p = generate_problem("perfect", &mut rng).unwrap();
+        assert_eq!(prob_p.topic, "perfect");
+        assert!(prob_p.question.contains("perfect"));
     }
 }
