@@ -1748,14 +1748,20 @@ impl BigUint {
         }
         let sliced = &self.digits[limb_shift..];
         if bit_shift == 0 {
-            let mut r = BigUint { digits: sliced.to_vec() };
+            let mut r = BigUint {
+                digits: sliced.to_vec(),
+            };
             r.trim();
             return r;
         }
         let mut res = Vec::with_capacity(sliced.len());
         for i in 0..sliced.len() {
             let cur = sliced[i] as u64 >> bit_shift;
-            let next = if i + 1 < sliced.len() { (sliced[i + 1] as u64) << (32 - bit_shift) } else { 0 };
+            let next = if i + 1 < sliced.len() {
+                (sliced[i + 1] as u64) << (32 - bit_shift)
+            } else {
+                0
+            };
             res.push(((cur | next) & 0xFFFF_FFFF) as u32);
         }
         let mut r = BigUint { digits: res };
@@ -1816,10 +1822,16 @@ impl BigUint {
 #[allow(clippy::manual_is_multiple_of)]
 pub fn lucas_lehmer(p: u32) -> Result<bool, MathError> {
     if p < 2 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p must be an integer >= 2",
+        ));
     }
     if p > 5000 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p exceeds maximum bound of 5000",
+        ));
     }
     if p == 2 {
         return Ok(true);
@@ -1868,10 +1880,16 @@ pub struct MersenneInfo {
 
 pub fn mersenne_info(p: u32) -> Result<MersenneInfo, MathError> {
     if p < 2 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p must be an integer >= 2",
+        ));
     }
     if p > 5000 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p exceeds maximum bound of 5000",
+        ));
     }
 
     let p_is_prime = is_prime(p as i64);
@@ -1922,10 +1940,16 @@ pub fn is_perfect(n: i64) -> bool {
 
 pub fn perfect_number(p: u32) -> Result<String, MathError> {
     if p < 2 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p must be an integer >= 2"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p must be an integer >= 2",
+        ));
     }
     if p > 5000 {
-        return Err(MathError(StatusCode::BAD_REQUEST, "Exponent p exceeds maximum bound of 5000"));
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Exponent p exceeds maximum bound of 5000",
+        ));
     }
     if !lucas_lehmer(p)? {
         return Err(MathError(
