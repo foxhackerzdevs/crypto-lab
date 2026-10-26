@@ -53,6 +53,8 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/dh/crack` | Configurable (Public or Basic Auth) | Diffie–Hellman discrete logarithm recovery via BSGS |
 | GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization (n = x² − y² = (x − y)(x + y)) with Legendre quadratic residue sieve |
 | GET (WS) | `/v1/math/chamber/ws` | Configurable (Public or Basic Auth) | WebSocket stream for real-time Fermat factorization visualization ("The Chamber of Primes") |
+| GET / POST | `/v1/math/mersenne` | Configurable (Public or Basic Auth) | Mersenne numbers $M_p = 2^p - 1$, Lucas–Lehmer deterministic primality testing, and prime sequence enumeration |
+| GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers $2^{p-1}(2^p - 1)$ and aliquot divisor verification ($\sigma(n) = 2n$) |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -70,7 +72,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.7.0",
+  "version": "0.9.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -124,7 +126,14 @@ Response:
     "GET /v1/math/dh/derive",
     "POST /v1/math/dh/derive",
     "GET /v1/math/dh/crack",
-    "POST /v1/math/dh/crack"
+    "POST /v1/math/dh/crack",
+    "GET /v1/math/fermat",
+    "POST /v1/math/fermat",
+    "GET /v1/math/chamber/ws",
+    "GET /v1/math/mersenne",
+    "POST /v1/math/mersenne",
+    "GET /v1/math/perfect",
+    "POST /v1/math/perfect"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -416,7 +425,7 @@ curl -sS -H "content-type: application/json" \
 ```
 
 #### 13. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, `rsa`, `dh`, and `mixed`.
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, `rsa`, `dh`, `mersenne`, `perfect`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"
@@ -503,6 +512,100 @@ Starting at $x = \lceil\sqrt{n}\rceil$, each attempt checks if $r = x^2 - n$ is 
   Interactive bidirectional streaming endpoint powering "The Chamber of Primes" frontend visualizer.
   - Client actions: `start` (`n`, `delay_ms`, `max_steps`), `pause`, `resume`, `step`, `speed` (`delay_ms`), `stop`.
   - Server event frames: `start`, `step` (with Legendre sieve filter info and rejection prime), `candidate`, `found`, `done`.
+
+#### 17. Mersenne Primes & Lucas–Lehmer Primality Test (`/v1/math/mersenne`)
+Mersenne numbers take the form $M_p = 2^p - 1$. A necessary condition for $M_p$ to be prime is that exponent $p$ is prime. The deterministic **Lucas–Lehmer primality test** evaluates the sequence:
+
+$$
+s_0 = 4, \quad s_i = s_{i-1}^2 - 2 \pmod{M_p}
+$$
+
+$M_p$ is prime if and only if $s_{p-2} \equiv 0 \pmod{M_p}$. Fast division-free modular reduction operates via bitwise shifts and masking: $X \equiv (X \gg p) + (X \ \& \ (2^p - 1)) \pmod{M_p}$.
+
+- **Single Exponent Primality Test (`p` parameter)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/mersenne?p=7"
+  ```
+  Response:
+  ```json
+  {
+    "p": 7,
+    "mp": "127",
+    "p_is_prime": true,
+    "is_prime": true,
+    "bits": 7,
+    "digits": 3,
+    "perfect_number": "8128"
+  }
+  ```
+
+- **Mersenne Primes Sequence Search (`limit` parameter)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/mersenne?limit=127"
+  ```
+  Response:
+  ```json
+  {
+    "limit": 127,
+    "primes": [2, 3, 5, 7, 13, 17, 19, 31, 61, 89, 107, 127]
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"p": 31}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/mersenne
+  ```
+
+#### 18. Euclid–Euler Perfect Numbers (`/v1/math/perfect`)
+An integer $n$ is perfect if the sum of its proper divisors equals $n$ ($\sigma(n) = 2n$). By the Euclid–Euler theorem, an even integer is perfect if and only if it has the form:
+
+$$
+n = 2^{p-1}(2^p - 1)
+$$
+
+where $M_p = 2^p - 1$ is a Mersenne prime.
+
+- **Check if Integer $n$ is Perfect (`n` parameter)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/perfect?n=8128"
+  ```
+  Response:
+  ```json
+  {
+    "n": 8128,
+    "is_perfect": true,
+    "sigma": 16256
+  }
+  ```
+
+- **Generate Even Perfect Number from Exponent $p$ (`p` parameter)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/perfect?p=7"
+  ```
+  Response:
+  ```json
+  {
+    "p": 7,
+    "perfect_number": "8128"
+  }
+  ```
+
+- **Combined Verification & Generation**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/perfect?n=28&p=3"
+  ```
+  Response:
+  ```json
+  {
+    "n": 28,
+    "is_perfect": true,
+    "sigma": 56,
+    "p": 3,
+    "perfect_number": "28"
+  }
+  ```
 
 ## Limits and status codes
 
