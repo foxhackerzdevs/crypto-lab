@@ -53,8 +53,8 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/dh/crack` | Configurable (Public or Basic Auth) | Diffie–Hellman discrete logarithm recovery via BSGS |
 | GET / POST | `/v1/math/fermat` | Configurable (Public or Basic Auth) | Fermat's difference of squares factorization (n = x² − y² = (x − y)(x + y)) with Legendre quadratic residue sieve |
 | GET (WS) | `/v1/math/chamber/ws` | Configurable (Public or Basic Auth) | WebSocket stream for real-time Fermat factorization visualization ("The Chamber of Primes") |
-| GET / POST | `/v1/math/mersenne` | Configurable (Public or Basic Auth) | Mersenne numbers $M_p = 2^p - 1$, Lucas–Lehmer deterministic primality testing, and prime sequence enumeration |
-| GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers $2^{p-1}(2^p - 1)$ and aliquot divisor verification ($\sigma(n) = 2n$) |
+| GET / POST | `/v1/math/mersenne` | Configurable (Public or Basic Auth) | Mersenne numbers M<sub>p</sub> = 2<sup>p</sup> − 1, Lucas–Lehmer deterministic primality testing, and prime sequence enumeration |
+| GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers 2<sup>p−1</sup>(2<sup>p</sup> − 1) and aliquot divisor verification (σ(n) = 2n) |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
