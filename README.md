@@ -520,7 +520,7 @@ $$
 s_0 = 4, \quad s_i = s_{i-1}^2 - 2 \pmod{M_p}
 $$
 
-$M_p$ is prime if and only if $s_{p-2} \equiv 0 \pmod{M_p}$. Fast division-free modular reduction operates via bitwise shifts and masking: $X \equiv (X \gg p) + (X \ \& \ (2^p - 1)) \pmod{M_p}$.
+$M_p$ is prime if and only if $s_{p-2} \equiv 0 \pmod{M_p}$. Fast division-free modular reduction operates via bitwise shifts and masking: `X ≡ (X >> p) + (X & ((1 << p) − 1)) (mod Mp)`.
 
 - **Single Exponent Primality Test (`p` parameter)**:
   ```bash
