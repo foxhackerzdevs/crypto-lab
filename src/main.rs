@@ -81,6 +81,8 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/mersenne",
     "GET /v1/math/perfect",
     "POST /v1/math/perfect",
+    "GET /v1/math/pm1",
+    "POST /v1/math/pm1",
 ];
 
 #[derive(Serialize)]
@@ -530,6 +532,15 @@ struct PerfectResponse {
     p: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     perfect_number: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct Pm1Request {
+    n: Option<i64>,
+    b1: Option<u64>,
+    b2: Option<u64>,
+    base: Option<i64>,
+    a: Option<i64>,
 }
 
 #[derive(Clone, Copy)]
@@ -1397,6 +1408,28 @@ async fn math_perfect_post(
     handle_perfect(req)
 }
 
+fn handle_pm1(req: Pm1Request) -> Result<Json<math::PollardPm1Result>, ApiError> {
+    let n = req.n.ok_or(ApiError(
+        StatusCode::BAD_REQUEST,
+        "n is required (integer to factor >= 2)",
+    ))?;
+    let base = req.base.or(req.a);
+    let res = math::pollard_p_minus_1(n, req.b1, req.b2, base)?;
+    Ok(Json(res))
+}
+
+async fn math_pm1_get(
+    Query(req): Query<Pm1Request>,
+) -> Result<Json<math::PollardPm1Result>, ApiError> {
+    handle_pm1(req)
+}
+
+async fn math_pm1_post(
+    Json(req): Json<Pm1Request>,
+) -> Result<Json<math::PollardPm1Result>, ApiError> {
+    handle_pm1(req)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WsClientAction {
@@ -1771,6 +1804,7 @@ fn app() -> Router {
             "/v1/math/perfect",
             get(math_perfect_get).post(math_perfect_post),
         )
+        .route("/v1/math/pm1", get(math_pm1_get).post(math_pm1_post))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1859,7 +1893,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 60);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 62);
     }
 
     #[tokio::test]
@@ -2684,8 +2718,9 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.9.0");
+        assert_eq!(info_body["version"], "0.10.0");
         let endpoints = info_body["endpoints"].as_array().unwrap();
+        assert_eq!(endpoints.len(), 62);
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
@@ -2693,6 +2728,8 @@ mod tests {
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/mersenne"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/perfect"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/perfect"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/pm1"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/pm1"));
     }
 
     #[tokio::test]
@@ -2800,5 +2837,50 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body_chal_p["topic"], "perfect");
+    }
+
+    #[tokio::test]
+    async fn tests_pm1_endpoints() {
+        // GET with b1=20 on n = 1009 * 1381 = 1393429
+        let (status, body) = json_response(
+            Request::get("/v1/math/pm1?n=1393429&b1=20")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert_eq!(body["factor"], 1009);
+        assert_eq!(body["cofactor"], 1381);
+        assert_eq!(body["stage"], 1);
+        assert_eq!(body["p_minus_1"], 1008);
+
+        // POST with b1=2, b2=600 (Stage 2) on n = 1019 * 1381 = 1407239
+        let (status_post, body_post) = json_response(
+            Request::post("/v1/math/pm1")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n": 1407239, "b1": 2, "b2": 600}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_post, StatusCode::OK);
+        assert_eq!(body_post["success"], true);
+        assert_eq!(body_post["factor"], 1019);
+        assert_eq!(body_post["stage"], 2);
+
+        // Missing n -> BAD_REQUEST
+        let (status_err, _) =
+            json_response(Request::get("/v1/math/pm1").body(Body::empty()).unwrap()).await;
+        assert_eq!(status_err, StatusCode::BAD_REQUEST);
+
+        // Challenge pm1 topic
+        let (status_chal, body_chal) = json_response(
+            Request::get("/v1/math/challenge?topic=pm1&seed=789")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_chal, StatusCode::OK);
+        assert_eq!(body_chal["topic"], "pm1");
     }
 }

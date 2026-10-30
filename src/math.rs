@@ -629,6 +629,348 @@ pub fn format_factorization(factors: &[PrimeFactor]) -> String {
         .join(" * ")
 }
 
+// ------------------- Pollard's p - 1 Factoring -------------------
+
+pub fn sieve_primes(limit: usize) -> Vec<usize> {
+    if limit < 2 {
+        return Vec::new();
+    }
+    let mut is_p = vec![true; limit + 1];
+    is_p[0] = false;
+    is_p[1] = false;
+    let mut p = 2;
+    while p * p <= limit {
+        if is_p[p] {
+            let mut i = p * p;
+            while i <= limit {
+                is_p[i] = false;
+                i += p;
+            }
+        }
+        p += 1;
+    }
+    is_p.into_iter()
+        .enumerate()
+        .filter_map(|(i, prime)| if prime { Some(i) } else { None })
+        .collect()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct PollardPm1Result {
+    pub n: i64,
+    pub factor: Option<i64>,
+    pub cofactor: Option<i64>,
+    pub success: bool,
+    pub stage: Option<u32>,
+    pub b1: u64,
+    pub b2: u64,
+    pub base: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p_minus_1: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p_minus_1_factors: Option<Vec<PrimeFactor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p_minus_1_expression: Option<String>,
+    pub steps: usize,
+    pub message: String,
+    pub elapsed_us: u128,
+}
+
+pub fn pollard_p_minus_1(
+    n: i64,
+    b1_opt: Option<u64>,
+    b2_opt: Option<u64>,
+    base_opt: Option<i64>,
+) -> Result<PollardPm1Result, MathError> {
+    let start = std::time::Instant::now();
+    if n < 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be an integer >= 2",
+        ));
+    }
+
+    let b1 = b1_opt.unwrap_or(1000).clamp(2, 1_000_000);
+    let b2 = b2_opt.unwrap_or(b1 * 10).clamp(b1, 5_000_000);
+    let base = base_opt.unwrap_or(2);
+
+    if base <= 1 || base >= n {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Base a must satisfy 1 < a < n",
+        ));
+    }
+
+    if n % 2 == 0 {
+        let p = 2i64;
+        let q = n / 2;
+        let p_minus_1 = p - 1;
+        let factors = factorize(p_minus_1).ok();
+        let expr = factors.as_ref().map(|f| format_factorization(f));
+        return Ok(PollardPm1Result {
+            n,
+            factor: Some(p),
+            cofactor: Some(q),
+            success: true,
+            stage: Some(0),
+            b1,
+            b2,
+            base,
+            p_minus_1: Some(p_minus_1),
+            p_minus_1_factors: factors,
+            p_minus_1_expression: expr,
+            steps: 0,
+            message: "n is even; factor 2 found immediately".to_string(),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    if is_prime(n) {
+        return Ok(PollardPm1Result {
+            n,
+            factor: None,
+            cofactor: None,
+            success: false,
+            stage: None,
+            b1,
+            b2,
+            base,
+            p_minus_1: None,
+            p_minus_1_factors: None,
+            p_minus_1_expression: None,
+            steps: 0,
+            message: format!("n = {} is already prime", n),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let n128 = n as i128;
+
+    let g0 = egcd(base as i128, n128).0 as i64;
+    if g0 > 1 && g0 < n {
+        let p = g0.min(n / g0);
+        let q = n / p;
+        let p_minus_1 = p - 1;
+        let factors = factorize(p_minus_1).ok();
+        let expr = factors.as_ref().map(|f| format_factorization(f));
+        return Ok(PollardPm1Result {
+            n,
+            factor: Some(p),
+            cofactor: Some(q),
+            success: true,
+            stage: Some(0),
+            b1,
+            b2,
+            base,
+            p_minus_1: Some(p_minus_1),
+            p_minus_1_factors: factors,
+            p_minus_1_expression: expr,
+            steps: 0,
+            message: format!("Base {} shares non-trivial factor {} with n", base, p),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let mut steps = 0usize;
+    let primes = sieve_primes(b2 as usize);
+    let mut x = base as i128;
+
+    // Stage 1
+    for &q in &primes {
+        if q as u64 > b1 {
+            break;
+        }
+        steps += 1;
+        let mut pk = q as u64;
+        let mut k = 1;
+        while pk.saturating_mul(q as u64) <= b1 {
+            pk *= q as u64;
+            k += 1;
+        }
+
+        let prev_x = x;
+        x = mod_pow(x, pk as i128, n128);
+        let g = egcd((x - 1).rem_euclid(n128), n128).0 as i64;
+
+        if g > 1 && g < n {
+            let p = g.min(n / g);
+            let q_factor = n / p;
+            let p_minus_1 = p - 1;
+            let factors = factorize(p_minus_1).ok();
+            let expr = factors.as_ref().map(|f| format_factorization(f));
+            return Ok(PollardPm1Result {
+                n,
+                factor: Some(p),
+                cofactor: Some(q_factor),
+                success: true,
+                stage: Some(1),
+                b1,
+                b2,
+                base,
+                p_minus_1: Some(p_minus_1),
+                p_minus_1_factors: factors,
+                p_minus_1_expression: expr,
+                steps,
+                message: format!(
+                    "Found non-trivial factor p = {} in Stage 1 at prime {}",
+                    p, q
+                ),
+                elapsed_us: start.elapsed().as_micros(),
+            });
+        }
+
+        if g == n {
+            let mut curr = prev_x;
+            for _ in 0..k {
+                curr = mod_pow(curr, q as i128, n128);
+                let g_sub = egcd((curr - 1).rem_euclid(n128), n128).0 as i64;
+                if g_sub > 1 && g_sub < n {
+                    let p = g_sub.min(n / g_sub);
+                    let q_factor = n / p;
+                    let p_minus_1 = p - 1;
+                    let factors = factorize(p_minus_1).ok();
+                    let expr = factors.as_ref().map(|f| format_factorization(f));
+                    return Ok(PollardPm1Result {
+                        n,
+                        factor: Some(p),
+                        cofactor: Some(q_factor),
+                        success: true,
+                        stage: Some(1),
+                        b1,
+                        b2,
+                        base,
+                        p_minus_1: Some(p_minus_1),
+                        p_minus_1_factors: factors,
+                        p_minus_1_expression: expr,
+                        steps,
+                        message: format!(
+                            "Found non-trivial factor p = {} in Stage 1 backtrack at prime {}",
+                            p, q
+                        ),
+                        elapsed_us: start.elapsed().as_micros(),
+                    });
+                }
+                if g_sub == n {
+                    break;
+                }
+            }
+            return Ok(PollardPm1Result {
+                n,
+                factor: None,
+                cofactor: None,
+                success: false,
+                stage: Some(1),
+                b1,
+                b2,
+                base,
+                p_minus_1: None,
+                p_minus_1_factors: None,
+                p_minus_1_expression: None,
+                steps,
+                message: format!("Stage 1 failed: all factors became congruent to 1 mod n at prime {}. Try a smaller B1 or different base.", q),
+                elapsed_us: start.elapsed().as_micros(),
+            });
+        }
+    }
+
+    // Stage 2
+    if b2 > b1 {
+        let s2_primes: Vec<usize> = primes
+            .into_iter()
+            .filter(|&p| p as u64 > b1 && p as u64 <= b2)
+            .collect();
+        if !s2_primes.is_empty() {
+            let a0 = x;
+            let q1 = s2_primes[0];
+            let mut cur_x = mod_pow(a0, q1 as i128, n128);
+            steps += 1;
+            let g = egcd((cur_x - 1).rem_euclid(n128), n128).0 as i64;
+            if g > 1 && g < n {
+                let p = g.min(n / g);
+                let q_factor = n / p;
+                let p_minus_1 = p - 1;
+                let factors = factorize(p_minus_1).ok();
+                let expr = factors.as_ref().map(|f| format_factorization(f));
+                return Ok(PollardPm1Result {
+                    n,
+                    factor: Some(p),
+                    cofactor: Some(q_factor),
+                    success: true,
+                    stage: Some(2),
+                    b1,
+                    b2,
+                    base,
+                    p_minus_1: Some(p_minus_1),
+                    p_minus_1_factors: factors,
+                    p_minus_1_expression: expr,
+                    steps,
+                    message: format!(
+                        "Found non-trivial factor p = {} in Stage 2 at prime {}",
+                        p, q1
+                    ),
+                    elapsed_us: start.elapsed().as_micros(),
+                });
+            }
+
+            let mut a0_d: std::collections::HashMap<usize, i128> = std::collections::HashMap::new();
+
+            for i in 0..s2_primes.len() - 1 {
+                let d = s2_primes[i + 1] - s2_primes[i];
+                let mult = *a0_d
+                    .entry(d)
+                    .or_insert_with(|| mod_pow(a0, d as i128, n128));
+                cur_x = (cur_x * mult).rem_euclid(n128);
+                steps += 1;
+                let g = egcd((cur_x - 1).rem_euclid(n128), n128).0 as i64;
+                if g > 1 && g < n {
+                    let p = g.min(n / g);
+                    let q_factor = n / p;
+                    let p_minus_1 = p - 1;
+                    let factors = factorize(p_minus_1).ok();
+                    let expr = factors.as_ref().map(|f| format_factorization(f));
+                    return Ok(PollardPm1Result {
+                        n,
+                        factor: Some(p),
+                        cofactor: Some(q_factor),
+                        success: true,
+                        stage: Some(2),
+                        b1,
+                        b2,
+                        base,
+                        p_minus_1: Some(p_minus_1),
+                        p_minus_1_factors: factors,
+                        p_minus_1_expression: expr,
+                        steps,
+                        message: format!(
+                            "Found non-trivial factor p = {} in Stage 2 at prime {}",
+                            p,
+                            s2_primes[i + 1]
+                        ),
+                        elapsed_us: start.elapsed().as_micros(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(PollardPm1Result {
+        n,
+        factor: None,
+        cofactor: None,
+        success: false,
+        stage: None,
+        b1,
+        b2,
+        base,
+        p_minus_1: None,
+        p_minus_1_factors: None,
+        p_minus_1_expression: None,
+        steps,
+        message: format!("No non-trivial factor found with B1 = {}, B2 = {}. Try increasing bounds or changing base.", b1, b2),
+        elapsed_us: start.elapsed().as_micros(),
+    })
+}
+
 pub fn euler_phi(n: i64) -> Result<i64, MathError> {
     if n < 1 {
         return Err(MathError(
@@ -1353,7 +1695,7 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
     let selected_topic = if topic == "mixed" {
         let choices = [
             "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
-            "dh", "mersenne", "perfect",
+            "dh", "mersenne", "perfect", "pm1",
         ];
         *rng.choose(&choices)
     } else {
@@ -1573,9 +1915,27 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "pm1" => {
+            let smooth_primes = [
+                29, 37, 41, 73, 97, 101, 109, 113, 137, 181, 193, 241, 257, 337, 433, 577, 601,
+                641, 769, 1009,
+            ];
+            let other_primes = [
+                103, 107, 127, 131, 139, 149, 151, 157, 163, 167, 173, 179,
+            ];
+            let p = *rng.choose(&smooth_primes);
+            let q = *rng.choose(&other_primes);
+            let n = p * q;
+            let ans = p.min(q);
+            Ok(ChallengeProblem {
+                topic: "pm1".to_string(),
+                question: f!("Smallest prime factor of composite n = {n} (hint: p - 1 is smooth)"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, or mixed",
         )),
     }
 }
@@ -2367,5 +2727,57 @@ mod tests {
         let prob_p = generate_problem("perfect", &mut rng).unwrap();
         assert_eq!(prob_p.topic, "perfect");
         assert!(prob_p.question.contains("perfect"));
+    }
+
+    #[test]
+    fn test_pollard_p_minus_1() {
+        // Stage 1 test: n = 1009 * 1381 = 1393429.
+        // 1009 - 1 = 1008 = 2^4 * 3^2 * 7. All prime powers <= 16.
+        let res1 = pollard_p_minus_1(1393429, Some(20), None, Some(2)).unwrap();
+        assert!(res1.success);
+        assert_eq!(res1.factor, Some(1009));
+        assert_eq!(res1.cofactor, Some(1381));
+        assert_eq!(res1.stage, Some(1));
+        assert_eq!(res1.p_minus_1, Some(1008));
+        assert_eq!(res1.p_minus_1_expression.as_deref(), Some("2^4 * 3^2 * 7"));
+
+        // Stage 2 test: n = 1019 * 1381 = 1407239.
+        // 1019 - 1 = 2 * 509. With B1=2, B2=600, Stage 2 catches 1019 at prime 509!
+        let res2 = pollard_p_minus_1(1407239, Some(2), Some(600), Some(2)).unwrap();
+        assert!(res2.success);
+        assert_eq!(res2.factor, Some(1019));
+        assert_eq!(res2.cofactor, Some(1381));
+        assert_eq!(res2.stage, Some(2));
+        assert_eq!(res2.p_minus_1, Some(1018));
+
+        // Prime test
+        let res_prime = pollard_p_minus_1(1009, Some(100), None, Some(2)).unwrap();
+        assert!(!res_prime.success);
+        assert_eq!(res_prime.factor, None);
+        assert!(res_prime.message.contains("already prime"));
+
+        // Even test
+        let res_even = pollard_p_minus_1(2048, Some(100), None, Some(2)).unwrap();
+        assert!(res_even.success);
+        assert_eq!(res_even.factor, Some(2));
+
+        // Failure when bounds too small
+        let res_fail = pollard_p_minus_1(1407239, Some(3), Some(10), Some(2)).unwrap();
+        assert!(!res_fail.success);
+        assert_eq!(res_fail.factor, None);
+
+        // Input validation
+        assert!(pollard_p_minus_1(1, None, None, None).is_err());
+        assert!(pollard_p_minus_1(15, None, None, Some(1)).is_err());
+        assert!(pollard_p_minus_1(15, None, None, Some(15)).is_err());
+    }
+
+    #[test]
+    fn test_challenge_pm1() {
+        let mut rng = SimpleRng::new(42);
+        let prob = generate_problem("pm1", &mut rng).unwrap();
+        assert_eq!(prob.topic, "pm1");
+        assert!(prob.question.contains("p - 1 is smooth"));
+        assert!(prob.answer > 1);
     }
 }

@@ -55,6 +55,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET (WS) | `/v1/math/chamber/ws` | Configurable (Public or Basic Auth) | WebSocket stream for real-time Fermat factorization visualization ("The Chamber of Primes") |
 | GET / POST | `/v1/math/mersenne` | Configurable (Public or Basic Auth) | Mersenne numbers M<sub>p</sub> = 2<sup>p</sup> − 1, Lucas–Lehmer deterministic primality testing, and prime sequence enumeration |
 | GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers 2<sup>p−1</sup>(2<sup>p</sup> − 1) and aliquot divisor verification (σ(n) = 2n) |
+| GET / POST | `/v1/math/pm1` | Configurable (Public or Basic Auth) | Pollard's p − 1 integer factorization with two-stage smoothness bounds (B1, B2) |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -72,7 +73,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -133,7 +134,9 @@ Response:
     "GET /v1/math/mersenne",
     "POST /v1/math/mersenne",
     "GET /v1/math/perfect",
-    "POST /v1/math/perfect"
+    "POST /v1/math/perfect",
+    "GET /v1/math/pm1",
+    "POST /v1/math/pm1"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -425,7 +428,7 @@ curl -sS -H "content-type: application/json" \
 ```
 
 #### 13. Challenge Generator (`/v1/math/challenge`)
-Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, `rsa`, `dh`, `mersenne`, `perfect`, and `mixed`.
+Generates seeded, reproducible practice problems for self-study and learning. Supports topics: `legendre`, `jacobi`, `sqrtmod`, `factor`, `totient`, `dlog`, `crt`, `ecdlp`, `rsa`, `dh`, `mersenne`, `perfect`, `pm1`, and `mixed`.
 
 ```bash
 curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/challenge?topic=legendre&seed=42&count=1"
@@ -605,6 +608,73 @@ where $M_p = 2^p - 1$ is a Mersenne prime.
     "p": 3,
     "perfect_number": "28"
   }
+  ```
+
+#### 19. Pollard's p − 1 Factorization (`/v1/math/pm1`)
+John Pollard's 1974 special-purpose integer factorization algorithm exploits composite numbers $n$ having a prime factor $p$ such that $p - 1$ is $B_1$-powersmooth (all prime powers $q^k \mid (p - 1)$ satisfy $q^k \le B_1$). By Fermat's Little Theorem, $a^{p-1} \equiv 1 \pmod p$, so $a^M \equiv 1 \pmod p$ for $M = \mathrm{lcm}(1, 2, \dots, B_1)$, allowing recovery of factor $p$ via $\gcd(a^M - 1, n)$.
+
+An optimized Stage 2 checks primes $q \in (B_1, B_2]$ using prime differences $d = q_{i+1} - q_i$, catching factors where $p - 1 = m \cdot q$ with $m$ $B_1$-powersmooth and $q \le B_2$.
+
+- **Stage 1 Smooth Factorization (`n` and `b1` parameters)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/pm1?n=1393429&b1=20"
+  ```
+  Response:
+  ```json
+  {
+    "n": 1393429,
+    "factor": 1009,
+    "cofactor": 1381,
+    "success": true,
+    "stage": 1,
+    "b1": 20,
+    "b2": 200,
+    "base": 2,
+    "p_minus_1": 1008,
+    "p_minus_1_factors": [
+      {"prime": 2, "power": 4},
+      {"prime": 3, "power": 2},
+      {"prime": 7, "power": 1}
+    ],
+    "p_minus_1_expression": "2^4 * 3^2 * 7",
+    "steps": 8,
+    "message": "Found non-trivial factor p = 1009 in Stage 1 at prime 7",
+    "elapsed_us": 14
+  }
+  ```
+
+- **Two-Stage Pollard p − 1 (`b2` parameter)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/pm1?n=1407239&b1=2&b2=600"
+  ```
+  Response:
+  ```json
+  {
+    "n": 1407239,
+    "factor": 1019,
+    "cofactor": 1381,
+    "success": true,
+    "stage": 2,
+    "b1": 2,
+    "b2": 600,
+    "base": 2,
+    "p_minus_1": 1018,
+    "p_minus_1_factors": [
+      {"prime": 2, "power": 1},
+      {"prime": 509, "power": 1}
+    ],
+    "p_minus_1_expression": "2 * 509",
+    "steps": 104,
+    "message": "Found non-trivial factor p = 1019 in Stage 2 at prime 509",
+    "elapsed_us": 48
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"n": 1012173119, "b1": 50}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/pm1
   ```
 
 ## Limits and status codes
