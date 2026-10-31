@@ -971,6 +971,322 @@ pub fn pollard_p_minus_1(
     })
 }
 
+// ------------------- Lenstra's Elliptic Curve Factorization (ECM) -------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EcmResult {
+    pub n: i64,
+    pub factor: Option<i64>,
+    pub cofactor: Option<i64>,
+    pub success: bool,
+    pub curve_index: usize,
+    pub curves_tested: usize,
+    pub stage: Option<u32>,
+    pub b1: u64,
+    pub b2: u64,
+    pub a: Option<i64>,
+    pub b: Option<i64>,
+    pub steps: usize,
+    pub message: String,
+    pub elapsed_us: u128,
+}
+
+enum EcAddResult {
+    Point(Option<Point>),
+    Factor(i64),
+}
+
+fn ecm_point_add(p1: Option<Point>, p2: Option<Point>, a: i64, n: i64) -> EcAddResult {
+    let (pt1, pt2) = match (p1, p2) {
+        (None, other) => return EcAddResult::Point(other),
+        (other, None) => return EcAddResult::Point(other),
+        (Some(first), Some(second)) => (first, second),
+    };
+
+    let n128 = n as i128;
+    let x1 = (pt1.x as i128).rem_euclid(n128);
+    let y1 = (pt1.y as i128).rem_euclid(n128);
+    let x2 = (pt2.x as i128).rem_euclid(n128);
+    let y2 = (pt2.y as i128).rem_euclid(n128);
+
+    if x1 == x2 {
+        if (y1 + y2).rem_euclid(n128) == 0 {
+            return EcAddResult::Point(None);
+        }
+        let den = (2 * y1).rem_euclid(n128);
+        let (g, inv, _) = egcd(den, n128);
+        if g > 1 && g < n128 {
+            return EcAddResult::Factor(g as i64);
+        }
+        if g == n128 {
+            return EcAddResult::Point(None);
+        }
+        let num = (3 * x1 * x1 + a as i128).rem_euclid(n128);
+        let lambda = (num * inv.rem_euclid(n128)).rem_euclid(n128);
+        let x3 = (lambda * lambda - x1 - x2).rem_euclid(n128);
+        let y3 = (lambda * (x1 - x3) - y1).rem_euclid(n128);
+        EcAddResult::Point(Some(Point {
+            x: x3 as i64,
+            y: y3 as i64,
+        }))
+    } else {
+        let den = (x2 - x1).rem_euclid(n128);
+        let (g, inv, _) = egcd(den, n128);
+        if g > 1 && g < n128 {
+            return EcAddResult::Factor(g as i64);
+        }
+        if g == n128 {
+            return EcAddResult::Point(None);
+        }
+        let num = (y2 - y1).rem_euclid(n128);
+        let lambda = (num * inv.rem_euclid(n128)).rem_euclid(n128);
+        let x3 = (lambda * lambda - x1 - x2).rem_euclid(n128);
+        let y3 = (lambda * (x1 - x3) - y1).rem_euclid(n128);
+        EcAddResult::Point(Some(Point {
+            x: x3 as i64,
+            y: y3 as i64,
+        }))
+    }
+}
+
+fn ecm_point_mul(mut k: u64, pt: Point, a: i64, n: i64) -> (Option<Point>, Option<i64>) {
+    let mut r: Option<Point> = None;
+    let mut q: Option<Point> = Some(pt);
+
+    while k > 0 {
+        if k & 1 == 1 {
+            match ecm_point_add(r, q, a, n) {
+                EcAddResult::Factor(factor) => return (None, Some(factor)),
+                EcAddResult::Point(new_r) => r = new_r,
+            }
+        }
+        k >>= 1;
+        if k > 0 {
+            match ecm_point_add(q, q, a, n) {
+                EcAddResult::Factor(factor) => return (None, Some(factor)),
+                EcAddResult::Point(new_q) => q = new_q,
+            }
+        }
+    }
+    (r, None)
+}
+
+pub fn lenstra_ecm(
+    n: i64,
+    b1_opt: Option<u64>,
+    b2_opt: Option<u64>,
+    curves_opt: Option<usize>,
+    seed_opt: Option<u64>,
+) -> Result<EcmResult, MathError> {
+    let start = std::time::Instant::now();
+    if n < 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be an integer >= 2",
+        ));
+    }
+
+    let b1 = b1_opt.unwrap_or(1000).clamp(2, 1_000_000);
+    let b2 = b2_opt.unwrap_or(b1 * 10).clamp(b1, 5_000_000);
+    let max_curves = curves_opt.unwrap_or(20).clamp(1, 500);
+    let seed = seed_opt.unwrap_or(42);
+
+    if n % 2 == 0 {
+        let p = 2;
+        let q = n / 2;
+        return Ok(EcmResult {
+            n,
+            factor: Some(p),
+            cofactor: Some(q),
+            success: true,
+            curve_index: 0,
+            curves_tested: 0,
+            stage: Some(0),
+            b1,
+            b2,
+            a: None,
+            b: None,
+            steps: 0,
+            message: "n is even; factor 2 found immediately".to_string(),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    if is_prime(n) {
+        return Ok(EcmResult {
+            n,
+            factor: None,
+            cofactor: None,
+            success: false,
+            curve_index: 0,
+            curves_tested: 0,
+            stage: None,
+            b1,
+            b2,
+            a: None,
+            b: None,
+            steps: 0,
+            message: format!("n = {} is already prime", n),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let primes = sieve_primes(b2 as usize);
+    let s1_primes: Vec<u64> = primes
+        .iter()
+        .filter(|&&p| (p as u64) <= b1)
+        .map(|&p| p as u64)
+        .collect();
+    let s2_primes: Vec<u64> = primes
+        .iter()
+        .filter(|&&p| (p as u64) > b1 && (p as u64) <= b2)
+        .map(|&p| p as u64)
+        .collect();
+
+    let mut rng = SimpleRng::new(seed);
+    let mut total_steps = 0usize;
+    let n128 = n as i128;
+
+    for curve_idx in 1..=max_curves {
+        let x0 = rng.gen_range(1, n - 1);
+        let y0 = rng.gen_range(1, n - 1);
+        let a = rng.gen_range(0, n - 1);
+
+        let x0_128 = x0 as i128;
+        let y0_128 = y0 as i128;
+        let a_128 = a as i128;
+        let b =
+            (y0_128 * y0_128 - x0_128 * x0_128 * x0_128 - a_128 * x0_128).rem_euclid(n128) as i64;
+
+        let b_128 = b as i128;
+        let disc = (4 * a_128 * a_128 * a_128 + 27 * b_128 * b_128).rem_euclid(n128);
+        let (g_disc, _, _) = egcd(disc, n128);
+        if g_disc > 1 && g_disc < n128 {
+            let p = (g_disc as i64).min(n / (g_disc as i64));
+            let q = n / p;
+            return Ok(EcmResult {
+                n,
+                factor: Some(p),
+                cofactor: Some(q),
+                success: true,
+                curve_index: curve_idx,
+                curves_tested: curve_idx,
+                stage: Some(0),
+                b1,
+                b2,
+                a: Some(a),
+                b: Some(b),
+                steps: total_steps,
+                message: format!(
+                    "Discriminant of curve {} shares non-trivial factor {} with n",
+                    curve_idx, p
+                ),
+                elapsed_us: start.elapsed().as_micros(),
+            });
+        }
+        if g_disc == n128 {
+            continue;
+        }
+
+        let mut pt = Some(Point { x: x0, y: y0 });
+
+        // Stage 1
+        for &q in &s1_primes {
+            total_steps += 1;
+            let mut pk = q;
+            while pk.saturating_mul(q) <= b1 {
+                pk *= q;
+            }
+
+            if let Some(curr_pt) = pt {
+                let (next_pt, factor_found) = ecm_point_mul(pk, curr_pt, a, n);
+                if let Some(factor) = factor_found {
+                    let p = factor.min(n / factor);
+                    let q_factor = n / p;
+                    return Ok(EcmResult {
+                        n,
+                        factor: Some(p),
+                        cofactor: Some(q_factor),
+                        success: true,
+                        curve_index: curve_idx,
+                        curves_tested: curve_idx,
+                        stage: Some(1),
+                        b1,
+                        b2,
+                        a: Some(a),
+                        b: Some(b),
+                        steps: total_steps,
+                        message: format!(
+                            "Found non-trivial factor p = {} on curve {} in Stage 1 at prime {}",
+                            p, curve_idx, q
+                        ),
+                        elapsed_us: start.elapsed().as_micros(),
+                    });
+                }
+                pt = next_pt;
+                if pt.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Stage 2
+        if let Some(curr_pt) = pt {
+            if b2 > b1 {
+                for &q in &s2_primes {
+                    total_steps += 1;
+                    let (_, factor_found) = ecm_point_mul(q, curr_pt, a, n);
+                    if let Some(factor) = factor_found {
+                        let p = factor.min(n / factor);
+                        let q_factor = n / p;
+                        return Ok(EcmResult {
+                            n,
+                            factor: Some(p),
+                            cofactor: Some(q_factor),
+                            success: true,
+                            curve_index: curve_idx,
+                            curves_tested: curve_idx,
+                            stage: Some(2),
+                            b1,
+                            b2,
+                            a: Some(a),
+                            b: Some(b),
+                            steps: total_steps,
+                            message: format!(
+                                "Found non-trivial factor p = {} on curve {} in Stage 2 at prime {}",
+                                p, curve_idx, q
+                            ),
+                            elapsed_us: start.elapsed().as_micros(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(EcmResult {
+        n,
+        factor: None,
+        cofactor: None,
+        success: false,
+        curve_index: max_curves,
+        curves_tested: max_curves,
+        stage: None,
+        b1,
+        b2,
+        a: None,
+        b: None,
+        steps: total_steps,
+        message: format!(
+            "No non-trivial factor found across {} curves with B1 = {}, B2 = {}. Try increasing curves or bounds.",
+            max_curves, b1, b2
+        ),
+        elapsed_us: start.elapsed().as_micros(),
+    })
+}
+
 pub fn euler_phi(n: i64) -> Result<i64, MathError> {
     if n < 1 {
         return Err(MathError(
@@ -1695,7 +2011,7 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
     let selected_topic = if topic == "mixed" {
         let choices = [
             "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
-            "dh", "mersenne", "perfect", "pm1",
+            "dh", "mersenne", "perfect", "pm1", "ecm",
         ];
         *rng.choose(&choices)
     } else {
@@ -1933,9 +2249,22 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "ecm" => {
+            let primes_p = [43, 47, 53, 59, 61, 67, 71, 79, 83, 89, 97, 101, 103, 107, 109, 113];
+            let primes_q = [127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199];
+            let p = *rng.choose(&primes_p);
+            let q = *rng.choose(&primes_q);
+            let n = p * q;
+            let ans = p.min(q);
+            Ok(ChallengeProblem {
+                topic: "ecm".to_string(),
+                question: f!("Smallest prime factor of composite n = {n} (hint: use Lenstra elliptic curve factorization)"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, ecm, or mixed",
         )),
     }
 }
@@ -2778,6 +3107,52 @@ mod tests {
         let prob = generate_problem("pm1", &mut rng).unwrap();
         assert_eq!(prob.topic, "pm1");
         assert!(prob.question.contains("p - 1 is smooth"));
+        assert!(prob.answer > 1);
+    }
+
+    #[test]
+    fn test_lenstra_ecm() {
+        // Factor 1393429 = 1009 * 1381
+        let res = lenstra_ecm(1393429, Some(50), Some(200), Some(10), Some(42)).unwrap();
+        assert!(res.success);
+        assert_eq!(res.factor, Some(1009));
+        assert_eq!(res.cofactor, Some(1381));
+        assert_eq!(res.stage, Some(1));
+
+        // Factor 1042387 = 701 * 1487 (non-smooth p-1)
+        let res2 = lenstra_ecm(1042387, Some(50), Some(200), Some(10), Some(42)).unwrap();
+        assert!(res2.success);
+        assert_eq!(res2.factor, Some(701));
+        assert_eq!(res2.cofactor, Some(1487));
+
+        // Factor 32-bit RSA modulus 2369625997 = 48541 * 48817
+        let res3 = lenstra_ecm(2369625997, Some(500), Some(2000), Some(20), Some(42)).unwrap();
+        assert!(res3.success);
+        assert!(res3.factor == Some(48541) || res3.factor == Some(48817));
+
+        // Prime test
+        let res_prime = lenstra_ecm(104729, Some(100), None, Some(5), Some(42)).unwrap();
+        assert!(!res_prime.success);
+        assert_eq!(res_prime.factor, None);
+        assert!(res_prime.message.contains("already prime"));
+
+        // Even test
+        let res_even = lenstra_ecm(1000, Some(100), None, Some(5), Some(42)).unwrap();
+        assert!(res_even.success);
+        assert_eq!(res_even.factor, Some(2));
+
+        // Input validation
+        assert!(lenstra_ecm(1, None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn test_challenge_ecm() {
+        let mut rng = SimpleRng::new(42);
+        let prob = generate_problem("ecm", &mut rng).unwrap();
+        assert_eq!(prob.topic, "ecm");
+        assert!(prob
+            .question
+            .contains("Lenstra elliptic curve factorization"));
         assert!(prob.answer > 1);
     }
 }

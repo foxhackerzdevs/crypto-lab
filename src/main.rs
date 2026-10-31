@@ -83,6 +83,8 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/perfect",
     "GET /v1/math/pm1",
     "POST /v1/math/pm1",
+    "GET /v1/math/ecm",
+    "POST /v1/math/ecm",
 ];
 
 #[derive(Serialize)]
@@ -541,6 +543,15 @@ struct Pm1Request {
     b2: Option<u64>,
     base: Option<i64>,
     a: Option<i64>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct EcmRequest {
+    n: Option<i64>,
+    b1: Option<u64>,
+    b2: Option<u64>,
+    curves: Option<usize>,
+    seed: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -1430,6 +1441,23 @@ async fn math_pm1_post(
     handle_pm1(req)
 }
 
+fn handle_ecm(req: EcmRequest) -> Result<Json<math::EcmResult>, ApiError> {
+    let n = req.n.ok_or(ApiError(
+        StatusCode::BAD_REQUEST,
+        "n is required (integer to factor >= 2)",
+    ))?;
+    let res = math::lenstra_ecm(n, req.b1, req.b2, req.curves, req.seed)?;
+    Ok(Json(res))
+}
+
+async fn math_ecm_get(Query(req): Query<EcmRequest>) -> Result<Json<math::EcmResult>, ApiError> {
+    handle_ecm(req)
+}
+
+async fn math_ecm_post(Json(req): Json<EcmRequest>) -> Result<Json<math::EcmResult>, ApiError> {
+    handle_ecm(req)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WsClientAction {
@@ -1805,6 +1833,7 @@ fn app() -> Router {
             get(math_perfect_get).post(math_perfect_post),
         )
         .route("/v1/math/pm1", get(math_pm1_get).post(math_pm1_post))
+        .route("/v1/math/ecm", get(math_ecm_get).post(math_ecm_post))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1893,7 +1922,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 62);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 64);
     }
 
     #[tokio::test]
@@ -2718,9 +2747,9 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.10.0");
+        assert_eq!(info_body["version"], "0.11.0");
         let endpoints = info_body["endpoints"].as_array().unwrap();
-        assert_eq!(endpoints.len(), 62);
+        assert_eq!(endpoints.len(), 64);
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
@@ -2730,6 +2759,8 @@ mod tests {
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/perfect"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/pm1"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/pm1"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/ecm"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/ecm"));
     }
 
     #[tokio::test]
@@ -2882,5 +2913,51 @@ mod tests {
         .await;
         assert_eq!(status_chal, StatusCode::OK);
         assert_eq!(body_chal["topic"], "pm1");
+    }
+
+    #[tokio::test]
+    async fn tests_ecm_endpoints() {
+        // GET with b1=50 on n = 1009 * 1381 = 1393429
+        let (status, body) = json_response(
+            Request::get("/v1/math/ecm?n=1393429&b1=50&curves=10&seed=42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert_eq!(body["factor"], 1009);
+        assert_eq!(body["cofactor"], 1381);
+        assert_eq!(body["stage"], 1);
+
+        // POST on n = 701 * 1487 = 1042387 (Stage 2)
+        let (status_post, body_post) = json_response(
+            Request::post("/v1/math/ecm")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"n": 1042387, "b1": 50, "b2": 200, "curves": 10, "seed": 42}"#,
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_post, StatusCode::OK);
+        assert_eq!(body_post["success"], true);
+        assert_eq!(body_post["factor"], 701);
+        assert_eq!(body_post["cofactor"], 1487);
+
+        // Missing n -> BAD_REQUEST
+        let (status_err, _) =
+            json_response(Request::get("/v1/math/ecm").body(Body::empty()).unwrap()).await;
+        assert_eq!(status_err, StatusCode::BAD_REQUEST);
+
+        // Challenge ecm topic
+        let (status_chal, body_chal) = json_response(
+            Request::get("/v1/math/challenge?topic=ecm&seed=123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_chal, StatusCode::OK);
+        assert_eq!(body_chal["topic"], "ecm");
     }
 }

@@ -56,6 +56,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/mersenne` | Configurable (Public or Basic Auth) | Mersenne numbers M<sub>p</sub> = 2<sup>p</sup> − 1, Lucas–Lehmer deterministic primality testing, and prime sequence enumeration |
 | GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers 2<sup>p−1</sup>(2<sup>p</sup> − 1) and aliquot divisor verification (σ(n) = 2n) |
 | GET / POST | `/v1/math/pm1` | Configurable (Public or Basic Auth) | Pollard's p − 1 integer factorization with two-stage smoothness bounds (B1, B2) |
+| GET / POST | `/v1/math/ecm` | Configurable (Public or Basic Auth) | Lenstra's elliptic curve factorization (ECM) with multi-curve exploration & two-stage smoothness bounds |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -73,7 +74,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -136,7 +137,9 @@ Response:
     "GET /v1/math/perfect",
     "POST /v1/math/perfect",
     "GET /v1/math/pm1",
-    "POST /v1/math/pm1"
+    "POST /v1/math/pm1",
+    "GET /v1/math/ecm",
+    "POST /v1/math/ecm"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -675,6 +678,70 @@ An optimized Stage 2 checks primes $q \in (B_1, B_2]$ using prime differences $d
   curl -sS -H "Content-Type: application/json" \
     -d '{"n": 1012173119, "b1": 50}' \
     https://abhrankan.duckdns.org/crypto-api/v1/math/pm1
+  ```
+
+#### 20. Lenstra's Elliptic Curve Factorization (`/v1/math/ecm`)
+Hendrik Lenstra's 1987 elliptic curve factorization algorithm (ECM) is a sub-exponential integer factorization method that generalizes Pollard's p − 1 algorithm. While Pollard's p − 1 algorithm is constrained by the fixed multiplicative group $(\mathbb{Z}/p\mathbb{Z})^\times$ of order $p - 1$, ECM replaces this with the group of points on a randomly chosen elliptic curve $E(\mathbb{F}_p)$.
+
+By Hasse's Theorem, the curve group order satisfies:
+
+$$p + 1 - 2\sqrt{p} \le \#E(\mathbb{F}_p) \le p + 1 + 2\sqrt{p}$$
+
+If $\#E(\mathbb{F}_p)$ is not smooth for one curve, ECM selects another independent random curve. In projective/affine point addition modulo $n$, computing $(x_2 - x_1)^{-1} \pmod n$ fails whenever $\gcd(x_2 - x_1, n) > 1$, instantly yielding a non-trivial factor of $n$.
+
+- **Two-Stage ECM with Stage 1 and Stage 2 bounds (`b1`, `b2`, `curves`, `seed`)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/ecm?n=1393429&b1=50&curves=10&seed=42"
+  ```
+  Response:
+  ```json
+  {
+    "n": 1393429,
+    "factor": 1009,
+    "cofactor": 1381,
+    "success": true,
+    "curve_index": 1,
+    "curves_tested": 1,
+    "stage": 1,
+    "b1": 50,
+    "b2": 500,
+    "a": 646064,
+    "b": 784997,
+    "steps": 15,
+    "message": "Found non-trivial factor p = 1009 on curve 1 in Stage 1 at prime 3",
+    "elapsed_us": 12
+  }
+  ```
+
+- **Factoring non-smooth p − 1 composites (e.g. Stage 2)**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/ecm?n=1042387&b1=50&b2=200&curves=10&seed=42"
+  ```
+  Response:
+  ```json
+  {
+    "n": 1042387,
+    "factor": 701,
+    "cofactor": 1487,
+    "success": true,
+    "curve_index": 1,
+    "curves_tested": 1,
+    "stage": 2,
+    "b1": 50,
+    "b2": 200,
+    "a": 543688,
+    "b": 428154,
+    "steps": 48,
+    "message": "Found non-trivial factor p = 701 on curve 1 in Stage 2 at prime 61",
+    "elapsed_us": 25
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"n": 2369625997, "b1": 500, "b2": 2000, "curves": 20, "seed": 42}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/ecm
   ```
 
 ## Limits and status codes
