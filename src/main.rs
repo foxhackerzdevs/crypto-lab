@@ -85,6 +85,8 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/pm1",
     "GET /v1/math/ecm",
     "POST /v1/math/ecm",
+    "GET /v1/math/dixon",
+    "POST /v1/math/dixon",
 ];
 
 #[derive(Serialize)]
@@ -552,6 +554,13 @@ struct EcmRequest {
     b2: Option<u64>,
     curves: Option<usize>,
     seed: Option<u64>,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct DixonRequest {
+    n: Option<i64>,
+    b: Option<u64>,
+    max_steps: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1458,6 +1467,27 @@ async fn math_ecm_post(Json(req): Json<EcmRequest>) -> Result<Json<math::EcmResu
     handle_ecm(req)
 }
 
+fn handle_dixon(req: DixonRequest) -> Result<Json<math::DixonResult>, ApiError> {
+    let n = req.n.ok_or(ApiError(
+        StatusCode::BAD_REQUEST,
+        "n is required (integer to factor >= 2)",
+    ))?;
+    let res = math::dixon_factor(n, req.b, req.max_steps)?;
+    Ok(Json(res))
+}
+
+async fn math_dixon_get(
+    Query(req): Query<DixonRequest>,
+) -> Result<Json<math::DixonResult>, ApiError> {
+    handle_dixon(req)
+}
+
+async fn math_dixon_post(
+    Json(req): Json<DixonRequest>,
+) -> Result<Json<math::DixonResult>, ApiError> {
+    handle_dixon(req)
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WsClientAction {
@@ -1834,6 +1864,7 @@ fn app() -> Router {
         )
         .route("/v1/math/pm1", get(math_pm1_get).post(math_pm1_post))
         .route("/v1/math/ecm", get(math_ecm_get).post(math_ecm_post))
+        .route("/v1/math/dixon", get(math_dixon_get).post(math_dixon_post))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1922,7 +1953,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 64);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 66);
     }
 
     #[tokio::test]
@@ -2747,9 +2778,9 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.11.0");
+        assert_eq!(info_body["version"], "0.12.0");
         let endpoints = info_body["endpoints"].as_array().unwrap();
-        assert_eq!(endpoints.len(), 64);
+        assert_eq!(endpoints.len(), 66);
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
@@ -2761,6 +2792,8 @@ mod tests {
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/pm1"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/ecm"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/ecm"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/dixon"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/dixon"));
     }
 
     #[tokio::test]
@@ -2959,5 +2992,47 @@ mod tests {
         .await;
         assert_eq!(status_chal, StatusCode::OK);
         assert_eq!(body_chal["topic"], "ecm");
+    }
+
+    #[tokio::test]
+    async fn tests_dixon_endpoints() {
+        // GET with b=30 on n = 163 * 521 = 84923
+        let (status, body) = json_response(
+            Request::get("/v1/math/dixon?n=84923&b=30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert!(body["factor"] == 163 || body["factor"] == 521);
+        assert!(body["congruence"].is_string());
+
+        // POST on n = 701 * 1487 = 1042387
+        let (status_post, body_post) = json_response(
+            Request::post("/v1/math/dixon")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n": 1042387, "b": 50}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_post, StatusCode::OK);
+        assert_eq!(body_post["success"], true);
+        assert!(body_post["factor"] == 701 || body_post["factor"] == 1487);
+
+        // Missing n -> BAD_REQUEST
+        let (status_err, _) =
+            json_response(Request::get("/v1/math/dixon").body(Body::empty()).unwrap()).await;
+        assert_eq!(status_err, StatusCode::BAD_REQUEST);
+
+        // Challenge dixon topic
+        let (status_chal, body_chal) = json_response(
+            Request::get("/v1/math/challenge?topic=dixon&seed=123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_chal, StatusCode::OK);
+        assert_eq!(body_chal["topic"], "dixon");
     }
 }

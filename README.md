@@ -57,6 +57,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/perfect` | Configurable (Public or Basic Auth) | Euclid–Euler even perfect numbers 2<sup>p−1</sup>(2<sup>p</sup> − 1) and aliquot divisor verification (σ(n) = 2n) |
 | GET / POST | `/v1/math/pm1` | Configurable (Public or Basic Auth) | Pollard's p − 1 integer factorization with two-stage smoothness bounds (B1, B2) |
 | GET / POST | `/v1/math/ecm` | Configurable (Public or Basic Auth) | Lenstra's elliptic curve factorization (ECM) with multi-curve exploration & two-stage smoothness bounds |
+| GET / POST | `/v1/math/dixon` | Configurable (Public or Basic Auth) | Dixon's random squares integer factorization with factor base and linear algebra over GF(2) |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -74,7 +75,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -139,7 +140,9 @@ Response:
     "GET /v1/math/pm1",
     "POST /v1/math/pm1",
     "GET /v1/math/ecm",
-    "POST /v1/math/ecm"
+    "POST /v1/math/ecm",
+    "GET /v1/math/dixon",
+    "POST /v1/math/dixon"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -742,6 +745,47 @@ If $\#E(\mathbb{F}_p)$ is not smooth for one curve, ECM selects another independ
   curl -sS -H "Content-Type: application/json" \
     -d '{"n": 2369625997, "b1": 500, "b2": 2000, "curves": 20, "seed": 42}' \
     https://abhrankan.duckdns.org/crypto-api/v1/math/ecm
+  ```
+
+#### 21. Dixon's Random Squares Factorization (`/v1/math/dixon`)
+John Dixon's 1981 algorithm is the prototype of all modern sub-exponential general-purpose integer factorization algorithms (including the Quadratic Sieve and the General Number Field Sieve). Unlike special-purpose algorithms (Pollard $\rho$, Fermat, Pollard $p-1$, ECM) whose complexity depends on the size or structure of the factor $p$, Dixon's algorithm has sub-exponential complexity depending solely on $n$:
+
+$$L_n[1/2, \sqrt{2}] = \exp\left((1 + o(1))\sqrt{2 \ln n \ln \ln n}\right)$$
+
+The algorithm operates in three stages:
+1. **Factor Base Construction**: Generates a factor base $F = \{-1, 2\} \cup \{p \le B \mid \left(\frac{n}{p}\right) = 1\}$. Primes for which $n$ is a quadratic non-residue are filtered out via Euler's criterion.
+2. **Relation Generation**: For $x = \lceil\sqrt{n}\rceil + 1, \lceil\sqrt{n}\rceil + 2, \dots$, evaluates centered residues $r \equiv x^2 \pmod n$ and checks for $B$-smoothness over $F$.
+3. **Linear Algebra over $\mathbb{F}_2$**: Forms the exponent parity matrix over the Galois field $\mathbb{F}_2$. Gaussian elimination extracts null-space combinations whose product yields congruent squares $X^2 \equiv Y^2 \pmod n$. Non-trivial factors are obtained via $\gcd(|X - Y|, n)$.
+
+- **GET Request**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/dixon?n=84923&b=30"
+  ```
+  Response:
+  ```json
+  {
+    "n": 84923,
+    "factor": 163,
+    "cofactor": 521,
+    "success": true,
+    "b": 30,
+    "factor_base_size": 4,
+    "relations_needed": 14,
+    "relations_found": 14,
+    "x": 505,
+    "y": 16,
+    "congruence": "505² ≡ 16² (mod 84923)",
+    "steps": 14,
+    "message": "Found factor p = 163 via congruent squares 505² ≡ 16² (mod 84923)",
+    "elapsed_us": 68
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"n": 1042387, "b": 50}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/dixon
   ```
 
 ## Limits and status codes
