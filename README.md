@@ -58,6 +58,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/pm1` | Configurable (Public or Basic Auth) | Pollard's p − 1 integer factorization with two-stage smoothness bounds (B1, B2) |
 | GET / POST | `/v1/math/ecm` | Configurable (Public or Basic Auth) | Lenstra's elliptic curve factorization (ECM) with multi-curve exploration & two-stage smoothness bounds |
 | GET / POST | `/v1/math/dixon` | Configurable (Public or Basic Auth) | Dixon's random squares integer factorization with factor base and linear algebra over GF(2) |
+| GET / POST | `/v1/math/qs` | Configurable (Public or Basic Auth) | Quadratic Sieve (QS) integer factorization over polynomial sieve array and GF(2) linear algebra |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -75,7 +76,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -142,7 +143,9 @@ Response:
     "GET /v1/math/ecm",
     "POST /v1/math/ecm",
     "GET /v1/math/dixon",
-    "POST /v1/math/dixon"
+    "POST /v1/math/dixon",
+    "GET /v1/math/qs",
+    "POST /v1/math/qs"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -786,6 +789,56 @@ The algorithm operates in three stages:
   curl -sS -H "Content-Type: application/json" \
     -d '{"n": 1042387, "b": 50}' \
     https://abhrankan.duckdns.org/crypto-api/v1/math/dixon
+  ```
+
+#### 22. Quadratic Sieve (QS) Factorization (`/v1/math/qs`)
+Carl Pomerance's 1981 Quadratic Sieve algorithm is the fastest general-purpose integer factorization algorithm for composites up to 100 decimal digits. It optimizes Dixon's random squares method by systematically replacing trial division with a polynomial sieve over an array $x \in [-M, M]$:
+
+$$
+Q(x) = (x + \lfloor\sqrt{n}\rfloor)^2 - n
+$$
+
+The algorithm operates in four stages:
+1. **Factor Base Construction**: Forms $F = \{-1, 2\} \cup \{p \le B \mid (n/p) = 1\}$, filtering out primes for which $n$ is a quadratic non-residue.
+2. **Tonelli–Shanks Sieve Initialization**: For each odd prime $p \in F$, computes the two roots of $(x + \lfloor\sqrt{n}\rfloor)^2 \equiv n \pmod p$ via modular square root.
+3. **Logarithmic Sieve**: Initializes an array of size $2M + 1$ with approximations of $\log_2 |Q(x)|$. For each factor base prime $p$, walks through arithmetic progressions $r + k p$ across the sieve interval, subtracting $\log_2 p$. Array cells falling below threshold indicate candidate $B$-smooth values of $Q(x)$.
+4. **Linear Algebra over $\mathbb{F}_2$**: Forms the exponent parity matrix and extracts null-space vectors using Gaussian elimination over $\mathbb{F}_2$. Combines smooth relations into congruent squares $X^2 \equiv Y^2 \pmod n$ to reveal non-trivial factors via $\gcd(|X - Y|, n)$.
+
+Parameters:
+- `n` (integer, required): composite integer to factor ($n \ge 4$).
+- `b` (integer, optional, default: 60): smoothness bound $B$ ($10 \le B \le 5000$).
+- `m` (integer, optional, default: 3000): sieve radius $M$ defining interval $[-M, M]$ (100 ≤ m ≤ 100,000).
+
+- **GET Request**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/qs?n=84923&b=60&m=3000"
+  ```
+  Response:
+  ```json
+  {
+    "n": 84923,
+    "factor": 163,
+    "cofactor": 521,
+    "success": true,
+    "b": 60,
+    "m": 3000,
+    "factor_base_size": 8,
+    "relations_needed": 18,
+    "relations_found": 18,
+    "x": 84625,
+    "y": 20021,
+    "congruence": "84625² ≡ 20021² (mod 84923)",
+    "candidates_checked": 168,
+    "message": "Found factor p = 163 via quadratic sieve congruence 84625² ≡ 20021² (mod 84923)",
+    "elapsed_us": 1631
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"n": 1042387, "b": 60, "m": 3000}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/qs
   ```
 
 ## Limits and status codes

@@ -1597,6 +1597,456 @@ pub fn dixon_factor(
     })
 }
 
+// ------------------- Quadratic Sieve (QS) Factorization -------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QsResult {
+    pub n: i64,
+    pub factor: Option<i64>,
+    pub cofactor: Option<i64>,
+    pub success: bool,
+    pub b: u64,
+    pub m: usize,
+    pub factor_base_size: usize,
+    pub relations_needed: usize,
+    pub relations_found: usize,
+    pub x: Option<i64>,
+    pub y: Option<i64>,
+    pub congruence: Option<String>,
+    pub candidates_checked: usize,
+    pub message: String,
+    pub elapsed_us: u128,
+}
+
+pub fn qs_factor(n: i64, b_opt: Option<u64>, m_opt: Option<usize>) -> Result<QsResult, MathError> {
+    if n < 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be an integer >= 2",
+        ));
+    }
+
+    let start = std::time::Instant::now();
+
+    // Check even
+    if n % 2 == 0 {
+        return Ok(QsResult {
+            n,
+            factor: Some(2),
+            cofactor: Some(n / 2),
+            success: true,
+            b: b_opt.unwrap_or(60),
+            m: m_opt.unwrap_or(3000),
+            factor_base_size: 1,
+            relations_needed: 1,
+            relations_found: 1,
+            x: None,
+            y: None,
+            congruence: None,
+            candidates_checked: 0,
+            message: "n is even; factor 2 found immediately".to_string(),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    // Check perfect square
+    let root = (n as f64).sqrt() as i64;
+    if root * root == n {
+        return Ok(QsResult {
+            n,
+            factor: Some(root),
+            cofactor: Some(root),
+            success: true,
+            b: b_opt.unwrap_or(60),
+            m: m_opt.unwrap_or(3000),
+            factor_base_size: 1,
+            relations_needed: 1,
+            relations_found: 1,
+            x: Some(root),
+            y: Some(0),
+            congruence: Some(format!("{}² ≡ 0² (mod {})", root, n)),
+            candidates_checked: 0,
+            message: format!("n = {} is a perfect square: {}²", n, root),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    // Check prime
+    if is_prime(n) {
+        return Ok(QsResult {
+            n,
+            factor: None,
+            cofactor: None,
+            success: false,
+            b: b_opt.unwrap_or(60),
+            m: m_opt.unwrap_or(3000),
+            factor_base_size: 0,
+            relations_needed: 0,
+            relations_found: 0,
+            x: None,
+            y: None,
+            congruence: None,
+            candidates_checked: 0,
+            message: format!("n = {} is already prime", n),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let b = b_opt.unwrap_or(60).clamp(10, 5000);
+    let m_radius = m_opt.unwrap_or(3000).clamp(100, 100_000);
+
+    // Build factor base: [-1, 2] + odd primes p <= B where (n/p) == 1
+    let mut fb: Vec<i64> = vec![-1, 2];
+    let all_primes = sieve_primes(b as usize);
+    for &p_usize in &all_primes {
+        let p = p_usize as i64;
+        if p > 2 && p <= b as i64 {
+            if let Ok(sym) = legendre_symbol(n % p, p) {
+                if sym == 1 {
+                    fb.push(p);
+                }
+            }
+        }
+    }
+
+    let k = fb.len();
+    let relations_needed = k + 10;
+    let n128 = n as i128;
+    let poly_m = root;
+    let arr_len = 2 * m_radius + 1;
+
+    // Sieve array initialized with log2 |Q(x)|
+    let mut logs = vec![0f32; arr_len];
+    for (i, log_val) in logs.iter_mut().enumerate() {
+        let x = (i as i64) - (m_radius as i64);
+        let x_val = (x + poly_m) as i128;
+        let qx = (x_val * x_val - n128).abs();
+        *log_val = if qx > 1 {
+            (qx as f64).log2() as f32
+        } else {
+            0.0
+        };
+    }
+
+    // Sieve subtraction for each prime in fb (skip -1)
+    for &p in fb.iter().skip(1) {
+        let p_log = (p as f64).log2() as f32;
+        let roots: Vec<i64> = if p == 2 {
+            vec![(1 - poly_m).rem_euclid(2)]
+        } else if let Ok(r_vec) = sqrt_mod(n % p, p) {
+            r_vec
+                .into_iter()
+                .map(|s| (s - poly_m).rem_euclid(p))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut unique_roots = roots;
+        unique_roots.sort_unstable();
+        unique_roots.dedup();
+
+        for r in unique_roots {
+            let i_start = (r + (m_radius as i64)).rem_euclid(p) as usize;
+            let p_usize = p as usize;
+            let mut i = i_start;
+            while i < arr_len {
+                logs[i] -= p_log;
+                i += p_usize;
+            }
+        }
+    }
+
+    let threshold = (b as f64).log2() as f32 * 1.8;
+    let mut relations: Vec<(i64, i128, Vec<u32>, Vec<u8>)> = Vec::new();
+    let mut candidates_checked = 0;
+
+    for (i, &rem_log) in logs.iter().enumerate() {
+        if rem_log <= threshold {
+            candidates_checked += 1;
+            let x = (i as i64) - (m_radius as i64);
+            let x_val = x + poly_m;
+            let x128 = x_val as i128;
+            let qx = x128 * x128 - n128;
+
+            let mut temp = qx;
+            let mut exps = vec![0u32; k];
+            if temp < 0 {
+                exps[0] = 1;
+                temp = -temp;
+            }
+
+            for (idx, &p) in fb.iter().enumerate().skip(1) {
+                let p128 = p as i128;
+                while temp > 0 && temp % p128 == 0 {
+                    exps[idx] += 1;
+                    temp /= p128;
+                }
+            }
+
+            if temp == 1 {
+                let parity: Vec<u8> = exps.iter().map(|&e| (e % 2) as u8).collect();
+                relations.push((x_val, qx, exps, parity));
+                if relations.len() >= relations_needed {
+                    break;
+                }
+            }
+        }
+    }
+
+    let relations_found = relations.len();
+    if relations_found <= k {
+        return Ok(QsResult {
+            n,
+            factor: None,
+            cofactor: None,
+            success: false,
+            b,
+            m: m_radius,
+            factor_base_size: k,
+            relations_needed,
+            relations_found,
+            x: None,
+            y: None,
+            congruence: None,
+            candidates_checked,
+            message: format!(
+                "Insufficient smooth relations found (found {} of {} needed with B = {}, M = {}). Try increasing B or M.",
+                relations_found, relations_needed, b, m_radius
+            ),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    // Gaussian elimination over GF(2)
+    let num_rels = relations.len();
+    let mut matrix: Vec<Vec<u8>> = relations.iter().map(|r| r.3.clone()).collect();
+    let mut tracking: Vec<Vec<u8>> = (0..num_rels)
+        .map(|i| {
+            let mut row = vec![0u8; num_rels];
+            row[i] = 1;
+            row
+        })
+        .collect();
+
+    let mut is_pivot = vec![false; num_rels];
+
+    for col in 0..k {
+        let mut found = None;
+        for r in 0..num_rels {
+            if !is_pivot[r] && matrix[r][col] == 1 {
+                found = Some(r);
+                break;
+            }
+        }
+        if let Some(pivot) = found {
+            is_pivot[pivot] = true;
+            let pivot_row = matrix[pivot].clone();
+            let pivot_track = tracking[pivot].clone();
+            for r in 0..num_rels {
+                if r != pivot && matrix[r][col] == 1 {
+                    for (item, &p_val) in matrix[r].iter_mut().zip(&pivot_row) {
+                        *item ^= p_val;
+                    }
+                    for (item, &p_val) in tracking[r].iter_mut().zip(&pivot_track) {
+                        *item ^= p_val;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check null-space rows
+    let mut null_rows = Vec::new();
+    for (r, row) in matrix.iter().enumerate() {
+        if row.iter().all(|&v| v == 0) {
+            null_rows.push(r);
+        }
+    }
+
+    // First try single null rows
+    for &r in &null_rows {
+        let subset: Vec<usize> = tracking[r]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &bit)| if bit == 1 { Some(i) } else { None })
+            .collect();
+
+        if subset.is_empty() {
+            continue;
+        }
+
+        let mut x_prod: i128 = 1;
+        for &idx in &subset {
+            x_prod = (x_prod * (relations[idx].0 as i128)).rem_euclid(n128);
+        }
+
+        let mut total_exp = vec![0u32; k];
+        for &idx in &subset {
+            for (j, &exp) in relations[idx].2.iter().enumerate() {
+                total_exp[j] += exp;
+            }
+        }
+
+        if !total_exp[0].is_multiple_of(2) {
+            continue;
+        }
+
+        let mut y_prod: i128 = 1;
+        let mut all_even = true;
+        for j in 1..k {
+            if !total_exp[j].is_multiple_of(2) {
+                all_even = false;
+                break;
+            }
+            let half_exp = (total_exp[j] / 2) as i128;
+            let term = mod_pow(fb[j] as i128, half_exp, n128);
+            y_prod = (y_prod * term).rem_euclid(n128);
+        }
+
+        if !all_even {
+            continue;
+        }
+
+        let x_val = x_prod as i64;
+        let y_val = y_prod as i64;
+
+        for &diff in &[(x_val - y_val).abs(), (x_val + y_val)] {
+            let g = egcd(diff as i128, n128).0 as i64;
+            if g > 1 && g < n {
+                let p = g.min(n / g);
+                let q = n / p;
+                return Ok(QsResult {
+                    n,
+                    factor: Some(p),
+                    cofactor: Some(q),
+                    success: true,
+                    b,
+                    m: m_radius,
+                    factor_base_size: k,
+                    relations_needed,
+                    relations_found,
+                    x: Some(x_val),
+                    y: Some(y_val),
+                    congruence: Some(format!("{}² ≡ {}² (mod {})", x_val, y_val, n)),
+                    candidates_checked,
+                    message: format!(
+                        "Found factor p = {} via quadratic sieve congruence {}² ≡ {}² (mod {})",
+                        p, x_val, y_val, n
+                    ),
+                    elapsed_us: start.elapsed().as_micros(),
+                });
+            }
+        }
+    }
+
+    // Try linear combinations of null-space pairs if single rows yielded trivial factors
+    for i in 0..null_rows.len() {
+        for j in (i + 1)..null_rows.len() {
+            let r_i = null_rows[i];
+            let r_j = null_rows[j];
+            let combined: Vec<u8> = tracking[r_i]
+                .iter()
+                .zip(&tracking[r_j])
+                .map(|(&a, &b)| a ^ b)
+                .collect();
+            let subset: Vec<usize> = combined
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &bit)| if bit == 1 { Some(idx) } else { None })
+                .collect();
+
+            if subset.is_empty() {
+                continue;
+            }
+
+            let mut x_prod: i128 = 1;
+            for &idx in &subset {
+                x_prod = (x_prod * (relations[idx].0 as i128)).rem_euclid(n128);
+            }
+
+            let mut total_exp = vec![0u32; k];
+            for &idx in &subset {
+                for (col, &exp) in relations[idx].2.iter().enumerate() {
+                    total_exp[col] += exp;
+                }
+            }
+
+            if !total_exp[0].is_multiple_of(2) {
+                continue;
+            }
+
+            let mut y_prod: i128 = 1;
+            let mut all_even = true;
+            for col in 1..k {
+                if !total_exp[col].is_multiple_of(2) {
+                    all_even = false;
+                    break;
+                }
+                let half_exp = (total_exp[col] / 2) as i128;
+                let term = mod_pow(fb[col] as i128, half_exp, n128);
+                y_prod = (y_prod * term).rem_euclid(n128);
+            }
+
+            if !all_even {
+                continue;
+            }
+
+            let x_val = x_prod as i64;
+            let y_val = y_prod as i64;
+
+            for &diff in &[(x_val - y_val).abs(), (x_val + y_val)] {
+                let g = egcd(diff as i128, n128).0 as i64;
+                if g > 1 && g < n {
+                    let p = g.min(n / g);
+                    let q = n / p;
+                    return Ok(QsResult {
+                        n,
+                        factor: Some(p),
+                        cofactor: Some(q),
+                        success: true,
+                        b,
+                        m: m_radius,
+                        factor_base_size: k,
+                        relations_needed,
+                        relations_found,
+                        x: Some(x_val),
+                        y: Some(y_val),
+                        congruence: Some(format!("{}² ≡ {}² (mod {})", x_val, y_val, n)),
+                        candidates_checked,
+                        message: format!(
+                            "Found factor p = {} via quadratic sieve combined congruence {}² ≡ {}² (mod {})",
+                            p, x_val, y_val, n
+                        ),
+                        elapsed_us: start.elapsed().as_micros(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(QsResult {
+        n,
+        factor: None,
+        cofactor: None,
+        success: false,
+        b,
+        m: m_radius,
+        factor_base_size: k,
+        relations_needed,
+        relations_found,
+        x: None,
+        y: None,
+        congruence: None,
+        candidates_checked,
+        message: format!(
+            "Collected {} smooth relations with B = {}, M = {}, but null-space congruences yielded trivial factors. Try increasing B or M.",
+            relations_found, b, m_radius
+        ),
+        elapsed_us: start.elapsed().as_micros(),
+    })
+}
+
 pub fn euler_phi(n: i64) -> Result<i64, MathError> {
     if n < 1 {
         return Err(MathError(
@@ -2321,7 +2771,7 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
     let selected_topic = if topic == "mixed" {
         let choices = [
             "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
-            "dh", "mersenne", "perfect", "pm1", "ecm", "dixon",
+            "dh", "mersenne", "perfect", "pm1", "ecm", "dixon", "qs",
         ];
         *rng.choose(&choices)
     } else {
@@ -2585,9 +3035,22 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "qs" => {
+            let primes_p = [31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79];
+            let primes_q = [83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139];
+            let p = *rng.choose(&primes_p);
+            let q = *rng.choose(&primes_q);
+            let n = p * q;
+            let ans = p.min(q);
+            Ok(ChallengeProblem {
+                topic: "qs".to_string(),
+                question: f!("Smallest prime factor of composite n = {n} (hint: use the Quadratic Sieve algorithm)"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, ecm, dixon, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, ecm, dixon, qs, or mixed",
         )),
     }
 }
@@ -3526,6 +3989,55 @@ mod tests {
         let prob = generate_problem("dixon", &mut rng).unwrap();
         assert_eq!(prob.topic, "dixon");
         assert!(prob.question.contains("Dixon's random squares"));
+        assert!(prob.answer > 1);
+    }
+
+    #[test]
+    fn test_qs_factor() {
+        // Factor 84923 = 163 * 521 with B = 60, M = 3000
+        let res = qs_factor(84923, Some(60), Some(3000)).unwrap();
+        assert!(res.success);
+        assert!(res.factor == Some(163) || res.factor == Some(521));
+        assert_eq!(res.factor.unwrap() * res.cofactor.unwrap(), 84923);
+
+        // Factor 1042387 = 701 * 1487 with B = 60, M = 3000
+        let res2 = qs_factor(1042387, Some(60), Some(3000)).unwrap();
+        assert!(res2.success);
+        assert!(res2.factor == Some(701) || res2.factor == Some(1487));
+        assert_eq!(res2.factor.unwrap() * res2.cofactor.unwrap(), 1042387);
+
+        // Factor 1393429 = 1009 * 1381 with B = 60, M = 3000
+        let res3 = qs_factor(1393429, Some(60), Some(3000)).unwrap();
+        assert!(res3.success);
+        assert!(res3.factor == Some(1009) || res3.factor == Some(1381));
+        assert_eq!(res3.factor.unwrap() * res3.cofactor.unwrap(), 1393429);
+
+        // Perfect square
+        let res_sq = qs_factor(169, None, None).unwrap();
+        assert!(res_sq.success);
+        assert_eq!(res_sq.factor, Some(13));
+
+        // Prime test
+        let res_prime = qs_factor(104729, None, None).unwrap();
+        assert!(!res_prime.success);
+        assert_eq!(res_prime.factor, None);
+        assert!(res_prime.message.contains("already prime"));
+
+        // Even test
+        let res_even = qs_factor(1000, None, None).unwrap();
+        assert!(res_even.success);
+        assert_eq!(res_even.factor, Some(2));
+
+        // Input validation
+        assert!(qs_factor(1, None, None).is_err());
+    }
+
+    #[test]
+    fn test_challenge_qs() {
+        let mut rng = SimpleRng::new(42);
+        let prob = generate_problem("qs", &mut rng).unwrap();
+        assert_eq!(prob.topic, "qs");
+        assert!(prob.question.contains("Quadratic Sieve"));
         assert!(prob.answer > 1);
     }
 }
