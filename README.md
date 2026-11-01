@@ -691,9 +691,9 @@ Hendrik Lenstra's 1987 elliptic curve factorization algorithm (ECM) is a sub-exp
 
 By Hasse's Theorem, the curve group order satisfies:
 
-$$p + 1 - 2\sqrt{p} \le \#E(\mathbb{F}_p) \le p + 1 + 2\sqrt{p}$$
+$$p + 1 - 2\sqrt{p} \le |E(\mathbb{F}_p)| \le p + 1 + 2\sqrt{p}$$
 
-If $\#E(\mathbb{F}_p)$ is not smooth for one curve, ECM selects another independent random curve. In projective/affine point addition modulo $n$, computing $(x_2 - x_1)^{-1} \pmod n$ fails whenever $\gcd(x_2 - x_1, n) > 1$, instantly yielding a non-trivial factor of $n$.
+If $|E(\mathbb{F}_p)|$ is not smooth for one curve, ECM selects another independent random curve. In projective/affine point addition modulo $n$, computing $(x_2 - x_1)^{-1} \pmod n$ fails whenever $\gcd(x_2 - x_1, n) > 1$, instantly yielding a non-trivial factor of $n$.
 
 - **Two-Stage ECM with Stage 1 and Stage 2 bounds (`b1`, `b2`, `curves`, `seed`)**:
   ```bash
