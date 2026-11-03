@@ -89,6 +89,8 @@ const ENDPOINTS: &[&str] = &[
     "POST /v1/math/dixon",
     "GET /v1/math/qs",
     "POST /v1/math/qs",
+    "GET /v1/math/squfof",
+    "POST /v1/math/squfof",
 ];
 
 #[derive(Serialize)]
@@ -1515,6 +1517,33 @@ async fn math_qs_post(Json(req): Json<QsRequest>) -> Result<Json<math::QsResult>
 }
 
 #[derive(Deserialize)]
+struct SqufofRequest {
+    n: Option<i64>,
+    max_steps: Option<u64>,
+}
+
+fn handle_squfof(req: SqufofRequest) -> Result<Json<math::SqufofResult>, ApiError> {
+    let n = req.n.ok_or(ApiError(
+        StatusCode::BAD_REQUEST,
+        "n is required (integer to factor >= 2)",
+    ))?;
+    let res = math::squfof_factor(n, req.max_steps)?;
+    Ok(Json(res))
+}
+
+async fn math_squfof_get(
+    Query(req): Query<SqufofRequest>,
+) -> Result<Json<math::SqufofResult>, ApiError> {
+    handle_squfof(req)
+}
+
+async fn math_squfof_post(
+    Json(req): Json<SqufofRequest>,
+) -> Result<Json<math::SqufofResult>, ApiError> {
+    handle_squfof(req)
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WsClientAction {
     Start {
@@ -1892,6 +1921,10 @@ fn app() -> Router {
         .route("/v1/math/ecm", get(math_ecm_get).post(math_ecm_post))
         .route("/v1/math/dixon", get(math_dixon_get).post(math_dixon_post))
         .route("/v1/math/qs", get(math_qs_get).post(math_qs_post))
+        .route(
+            "/v1/math/squfof",
+            get(math_squfof_get).post(math_squfof_post),
+        )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
@@ -1980,7 +2013,7 @@ mod tests {
             body["environment"],
             option_env!("LAB_API_ENV").unwrap_or("unknown")
         );
-        assert_eq!(body["endpoints"].as_array().unwrap().len(), 68);
+        assert_eq!(body["endpoints"].as_array().unwrap().len(), 70);
     }
 
     #[tokio::test]
@@ -2805,9 +2838,9 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.13.0");
+        assert_eq!(info_body["version"], "0.14.0");
         let endpoints = info_body["endpoints"].as_array().unwrap();
-        assert_eq!(endpoints.len(), 68);
+        assert_eq!(endpoints.len(), 70);
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/fermat"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/chamber/ws"));
@@ -2823,6 +2856,8 @@ mod tests {
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/dixon"));
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/qs"));
         assert!(endpoints.iter().any(|e| e == "POST /v1/math/qs"));
+        assert!(endpoints.iter().any(|e| e == "GET /v1/math/squfof"));
+        assert!(endpoints.iter().any(|e| e == "POST /v1/math/squfof"));
     }
 
     #[tokio::test]
@@ -3105,5 +3140,47 @@ mod tests {
         .await;
         assert_eq!(status_chal, StatusCode::OK);
         assert_eq!(body_chal["topic"], "qs");
+    }
+
+    #[tokio::test]
+    async fn tests_squfof_endpoints() {
+        // GET on n = 163 * 521 = 84923
+        let (status, body) = json_response(
+            Request::get("/v1/math/squfof?n=84923")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["success"], true);
+        assert!(body["factor"] == 163 || body["factor"] == 521);
+        assert_eq!(body["multiplier"], 1);
+
+        // POST on n = 701 * 1487 = 1042387
+        let (status_post, body_post) = json_response(
+            Request::post("/v1/math/squfof")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"n": 1042387}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_post, StatusCode::OK);
+        assert_eq!(body_post["success"], true);
+        assert!(body_post["factor"] == 701 || body_post["factor"] == 1487);
+
+        // Missing n -> BAD_REQUEST
+        let (status_err, _) =
+            json_response(Request::get("/v1/math/squfof").body(Body::empty()).unwrap()).await;
+        assert_eq!(status_err, StatusCode::BAD_REQUEST);
+
+        // Challenge squfof topic
+        let (status_chal, body_chal) = json_response(
+            Request::get("/v1/math/challenge?topic=squfof&seed=123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status_chal, StatusCode::OK);
+        assert_eq!(body_chal["topic"], "squfof");
     }
 }

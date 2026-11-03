@@ -59,6 +59,7 @@ JSON requests must use `Content-Type: application/json`. All `/v1/math/*` endpoi
 | GET / POST | `/v1/math/ecm` | Configurable (Public or Basic Auth) | Lenstra's elliptic curve factorization (ECM) with multi-curve exploration & two-stage smoothness bounds |
 | GET / POST | `/v1/math/dixon` | Configurable (Public or Basic Auth) | Dixon's random squares integer factorization with factor base and linear algebra over GF(2) |
 | GET / POST | `/v1/math/qs` | Configurable (Public or Basic Auth) | Quadratic Sieve (QS) integer factorization over polynomial sieve array and GF(2) linear algebra |
+| GET / POST | `/v1/math/squfof` | Configurable (Public or Basic Auth) | Shanks's square forms factorization (SQUFOF) with binary quadratic form infrastructure |
 
 The public equivalents use the `/crypto-api/` prefix, for example `https://abhrankan.duckdns.org/crypto-api/v1/math/sqrtmod?a=10&p=13`.
 
@@ -76,7 +77,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "endpoints": [
     "GET /health",
     "GET /v1/info",
@@ -145,7 +146,9 @@ Response:
     "GET /v1/math/dixon",
     "POST /v1/math/dixon",
     "GET /v1/math/qs",
-    "POST /v1/math/qs"
+    "POST /v1/math/qs",
+    "GET /v1/math/squfof",
+    "POST /v1/math/squfof"
   ],
   "build_profile": "release",
   "environment": "production"
@@ -839,6 +842,45 @@ Parameters:
   curl -sS -H "Content-Type: application/json" \
     -d '{"n": 1042387, "b": 60, "m": 3000}' \
     https://abhrankan.duckdns.org/crypto-api/v1/math/qs
+  ```
+
+#### 23. Shanks's Square Forms Factorization (`/v1/math/squfof`)
+Daniel Shanks's 1975 Square Forms Factorization algorithm (SQUFOF) is an unconditionally deterministic $O(n^{1/4})$ integer factorization method operating in the infrastructure of binary quadratic forms of discriminant $D = k n$. SQUFOF is widely used in production algebra systems (such as `msieve` and PARI/GP) as the primary factoring workhorse for 64-bit cofactors before launching general sieves.
+
+The algorithm executes in two cycles:
+1. **Cycle 1 (Square Form Search)**: Computes continued-fraction-like reductions of the principal form of discriminant $D = k n$. At even step indices, checks whether $Q_i$ is a perfect square $r^2$.
+2. **Cycle 2 (Ambiguous Form Inversion)**: Initializes an inverse form from the square root form $(r, P, \dots)$ and marches through reduced forms until reaching an ambiguous form where $P_0 = P_1$. The non-trivial factor is recovered as $\gcd(n, P_1)$.
+
+Parameters:
+- `n` (integer, required): composite integer to factor ($n \ge 4$).
+- `max_steps` (integer, optional, default: 50000): maximum reduction steps allowed per multiplier (1 ≤ max_steps ≤ 500,000).
+
+- **GET Request**:
+  ```bash
+  curl -sS "https://abhrankan.duckdns.org/crypto-api/v1/math/squfof?n=84923"
+  ```
+  Response:
+  ```json
+  {
+    "n": 84923,
+    "factor": 163,
+    "cofactor": 521,
+    "success": true,
+    "multiplier": 1,
+    "cycle1_steps": 4,
+    "cycle2_steps": 2,
+    "square_q": 1156,
+    "sqrt_q": 34,
+    "message": "Found non-trivial factor p = 163 via SQUFOF (multiplier k = 1, cycle 1 = 4 steps, cycle 2 = 2 steps)",
+    "elapsed_us": 25
+  }
+  ```
+
+- **JSON POST Request**:
+  ```bash
+  curl -sS -H "Content-Type: application/json" \
+    -d '{"n": 1042387}' \
+    https://abhrankan.duckdns.org/crypto-api/v1/math/squfof
   ```
 
 ## Limits and status codes

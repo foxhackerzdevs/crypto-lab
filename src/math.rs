@@ -2047,6 +2047,221 @@ pub fn qs_factor(n: i64, b_opt: Option<u64>, m_opt: Option<usize>) -> Result<QsR
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SqufofResult {
+    pub n: i64,
+    pub factor: Option<i64>,
+    pub cofactor: Option<i64>,
+    pub success: bool,
+    pub multiplier: u64,
+    pub cycle1_steps: u64,
+    pub cycle2_steps: u64,
+    pub square_q: Option<u64>,
+    pub sqrt_q: Option<u64>,
+    pub message: String,
+    pub elapsed_us: u128,
+}
+
+pub fn squfof_factor(n: i64, max_steps_opt: Option<u64>) -> Result<SqufofResult, MathError> {
+    if n < 2 {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "n must be an integer >= 2",
+        ));
+    }
+
+    let start = std::time::Instant::now();
+
+    if n % 2 == 0 {
+        return Ok(SqufofResult {
+            n,
+            factor: Some(2),
+            cofactor: Some(n / 2),
+            success: true,
+            multiplier: 1,
+            cycle1_steps: 0,
+            cycle2_steps: 0,
+            square_q: None,
+            sqrt_q: None,
+            message: "n is even; factor 2 found immediately".to_string(),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let n_u128 = n as u128;
+    let root = n_u128.isqrt() as i64;
+    if (root as u128) * (root as u128) == n_u128 {
+        return Ok(SqufofResult {
+            n,
+            factor: Some(root),
+            cofactor: Some(root),
+            success: true,
+            multiplier: 1,
+            cycle1_steps: 0,
+            cycle2_steps: 0,
+            square_q: None,
+            sqrt_q: None,
+            message: format!("n = {n} is a perfect square: {root}²"),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    if is_prime(n) {
+        return Ok(SqufofResult {
+            n,
+            factor: None,
+            cofactor: None,
+            success: false,
+            multiplier: 0,
+            cycle1_steps: 0,
+            cycle2_steps: 0,
+            square_q: None,
+            sqrt_q: None,
+            message: format!("n = {n} is already prime"),
+            elapsed_us: start.elapsed().as_micros(),
+        });
+    }
+
+    let max_steps_limit = max_steps_opt.unwrap_or(50_000).clamp(1, 500_000);
+    let multipliers: [u64; 16] = [
+        1, 3, 5, 7, 11, 15, 21, 33, 35, 55, 77, 105, 165, 231, 385, 1155,
+    ];
+
+    for &k in &multipliers {
+        let d = (k as i128) * (n as i128);
+        if d < 0 {
+            continue;
+        }
+        let d_u128 = d as u128;
+        let p_init = d_u128.isqrt() as i128;
+
+        if p_init * p_init == d {
+            let g = egcd(p_init, n as i128).0 as i64;
+            if g > 1 && g < n {
+                let p = g.min(n / g);
+                let q = n / p;
+                return Ok(SqufofResult {
+                    n,
+                    factor: Some(p),
+                    cofactor: Some(q),
+                    success: true,
+                    multiplier: k,
+                    cycle1_steps: 0,
+                    cycle2_steps: 0,
+                    square_q: None,
+                    sqrt_q: None,
+                    message: format!("Found factor p = {p} via square root of D = {k} * n"),
+                    elapsed_us: start.elapsed().as_micros(),
+                });
+            }
+            continue;
+        }
+
+        let mut p0 = p_init;
+        let mut q0: i128 = 1;
+        let mut q1: i128 = d - p0 * p0;
+        if q1 == 0 {
+            continue;
+        }
+
+        let l_bound = 2 * (2 * (p_init as u128).isqrt()).isqrt() as u64;
+        let b_limit = (3 * l_bound).max(max_steps_limit);
+
+        let mut found_square = false;
+        let mut i = 1u64;
+        let mut p_1 = p0;
+        let mut q_2 = q1;
+
+        while i <= b_limit {
+            let b = (p_init + p0) / q1;
+            p_1 = b * q1 - p0;
+            q_2 = q0 + b * (p0 - p_1);
+
+            if q_2 == 0 {
+                break;
+            }
+
+            i += 1;
+            if i.is_multiple_of(2) && q_2 > 0 {
+                let q_sqrt = (q_2 as u128).isqrt() as i128;
+                if q_sqrt * q_sqrt == q_2 {
+                    found_square = true;
+                    break;
+                }
+            }
+
+            p0 = p_1;
+            q0 = q1;
+            q1 = q_2;
+        }
+
+        if !found_square || q_2 <= 0 {
+            continue;
+        }
+
+        let q_sqrt = (q_2 as u128).isqrt() as i128;
+        let b_0 = (p_init - p_1) / q_sqrt;
+        p0 = b_0 * q_sqrt + p_1;
+        q0 = q_sqrt;
+        q1 = (d - p0 * p0) / q0;
+
+        let mut steps2 = 0u64;
+        while steps2 < b_limit {
+            steps2 += 1;
+            if q1 == 0 {
+                break;
+            }
+            let b = (p_init + p0) / q1;
+            p_1 = b * q1 - p0;
+            q_2 = q0 + b * (p0 - p_1);
+
+            if p0 == p_1 {
+                break;
+            }
+            p0 = p_1;
+            q0 = q1;
+            q1 = q_2;
+        }
+
+        let g = egcd(n as i128, p_1).0 as i64;
+        if g > 1 && g < n {
+            let p = g.min(n / g);
+            let q = n / p;
+            return Ok(SqufofResult {
+                n,
+                factor: Some(p),
+                cofactor: Some(q),
+                success: true,
+                multiplier: k,
+                cycle1_steps: i,
+                cycle2_steps: steps2,
+                square_q: Some(q_2 as u64),
+                sqrt_q: Some(q_sqrt as u64),
+                message: format!(
+                    "Found non-trivial factor p = {p} via SQUFOF (multiplier k = {k}, cycle 1 = {i} steps, cycle 2 = {steps2} steps)"
+                ),
+                elapsed_us: start.elapsed().as_micros(),
+            });
+        }
+    }
+
+    Ok(SqufofResult {
+        n,
+        factor: None,
+        cofactor: None,
+        success: false,
+        multiplier: 0,
+        cycle1_steps: 0,
+        cycle2_steps: 0,
+        square_q: None,
+        sqrt_q: None,
+        message: format!(
+            "SQUFOF failed to factor n = {n} within step limits across multipliers. Try increasing max_steps or use QS/ECM."
+        ),
+        elapsed_us: start.elapsed().as_micros(),
+    })
+}
+
 pub fn euler_phi(n: i64) -> Result<i64, MathError> {
     if n < 1 {
         return Err(MathError(
@@ -2771,7 +2986,7 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
     let selected_topic = if topic == "mixed" {
         let choices = [
             "legendre", "jacobi", "sqrtmod", "crt", "ecdlp", "factor", "totient", "dlog", "rsa",
-            "dh", "mersenne", "perfect", "pm1", "ecm", "dixon", "qs",
+            "dh", "mersenne", "perfect", "pm1", "ecm", "dixon", "qs", "squfof",
         ];
         *rng.choose(&choices)
     } else {
@@ -3048,9 +3263,22 @@ pub fn generate_problem(topic: &str, rng: &mut SimpleRng) -> Result<ChallengePro
                 answer: ans,
             })
         }
+        "squfof" => {
+            let primes_p = [37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83];
+            let primes_q = [89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149];
+            let p = *rng.choose(&primes_p);
+            let q = *rng.choose(&primes_q);
+            let n = p * q;
+            let ans = p.min(q);
+            Ok(ChallengeProblem {
+                topic: "squfof".to_string(),
+                question: f!("Smallest prime factor of composite n = {n} (hint: use Shanks's square forms factorization)"),
+                answer: ans,
+            })
+        }
         _ => Err(MathError(
             StatusCode::BAD_REQUEST,
-            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, ecm, dixon, qs, or mixed",
+            "topic must be legendre, jacobi, sqrtmod, crt, ecdlp, factor, totient, dlog, rsa, dh, mersenne, perfect, pm1, ecm, dixon, qs, squfof, or mixed",
         )),
     }
 }
@@ -4038,6 +4266,63 @@ mod tests {
         let prob = generate_problem("qs", &mut rng).unwrap();
         assert_eq!(prob.topic, "qs");
         assert!(prob.question.contains("Quadratic Sieve"));
+        assert!(prob.answer > 1);
+    }
+
+    #[test]
+    fn test_squfof_factor() {
+        // n = 163 * 521 = 84923
+        let res = squfof_factor(84923, None).unwrap();
+        assert!(res.success);
+        assert!(res.factor == Some(163) || res.factor == Some(521));
+        assert_eq!(res.factor.unwrap() * res.cofactor.unwrap(), 84923);
+
+        // n = 701 * 1487 = 1042387
+        let res2 = squfof_factor(1042387, None).unwrap();
+        assert!(res2.success);
+        assert!(res2.factor == Some(701) || res2.factor == Some(1487));
+        assert_eq!(res2.factor.unwrap() * res2.cofactor.unwrap(), 1042387);
+
+        // n = 1009 * 1381 = 1393429
+        let res3 = squfof_factor(1393429, None).unwrap();
+        assert!(res3.success);
+        assert!(res3.factor == Some(1009) || res3.factor == Some(1381));
+        assert_eq!(res3.factor.unwrap() * res3.cofactor.unwrap(), 1393429);
+
+        // n = 113 * 19573 = 2211749
+        let res4 = squfof_factor(2211749, None).unwrap();
+        assert!(res4.success);
+        assert!(res4.factor == Some(113) || res4.factor == Some(19573));
+        assert_eq!(res4.factor.unwrap() * res4.cofactor.unwrap(), 2211749);
+
+        // Perfect square
+        let res_sq = squfof_factor(169, None).unwrap();
+        assert!(res_sq.success);
+        assert_eq!(res_sq.factor, Some(13));
+
+        // Prime test
+        let res_prime = squfof_factor(104729, None).unwrap();
+        assert!(!res_prime.success);
+        assert_eq!(res_prime.factor, None);
+        assert!(res_prime.message.contains("already prime"));
+
+        // Even test
+        let res_even = squfof_factor(1000, None).unwrap();
+        assert!(res_even.success);
+        assert_eq!(res_even.factor, Some(2));
+
+        // Input validation
+        assert!(squfof_factor(1, None).is_err());
+    }
+
+    #[test]
+    fn test_challenge_squfof() {
+        let mut rng = SimpleRng::new(42);
+        let prob = generate_problem("squfof", &mut rng).unwrap();
+        assert_eq!(prob.topic, "squfof");
+        assert!(prob
+            .question
+            .contains("Shanks's square forms factorization"));
         assert!(prob.answer > 1);
     }
 }
