@@ -2200,6 +2200,7 @@ pub fn squfof_factor(n: i64, max_steps_opt: Option<u64>) -> Result<SqufofResult,
         }
 
         let q_sqrt = (q_2 as u128).isqrt() as i128;
+        let square_q = q_2 as u64;
         let b_0 = (p_init - p_1) / q_sqrt;
         p0 = b_0 * q_sqrt + p_1;
         q0 = q_sqrt;
@@ -2235,7 +2236,7 @@ pub fn squfof_factor(n: i64, max_steps_opt: Option<u64>) -> Result<SqufofResult,
                 multiplier: k,
                 cycle1_steps: i,
                 cycle2_steps: steps2,
-                square_q: Some(q_2 as u64),
+                square_q: Some(square_q),
                 sqrt_q: Some(q_sqrt as u64),
                 message: format!(
                     "Found non-trivial factor p = {p} via SQUFOF (multiplier k = {k}, cycle 1 = {i} steps, cycle 2 = {steps2} steps)"
@@ -4276,24 +4277,28 @@ mod tests {
         assert!(res.success);
         assert!(res.factor == Some(163) || res.factor == Some(521));
         assert_eq!(res.factor.unwrap() * res.cofactor.unwrap(), 84923);
+        assert_eq!(res.sqrt_q.unwrap().pow(2), res.square_q.unwrap());
 
         // n = 701 * 1487 = 1042387
         let res2 = squfof_factor(1042387, None).unwrap();
         assert!(res2.success);
         assert!(res2.factor == Some(701) || res2.factor == Some(1487));
         assert_eq!(res2.factor.unwrap() * res2.cofactor.unwrap(), 1042387);
+        assert_eq!(res2.sqrt_q.unwrap().pow(2), res2.square_q.unwrap());
 
         // n = 1009 * 1381 = 1393429
         let res3 = squfof_factor(1393429, None).unwrap();
         assert!(res3.success);
         assert!(res3.factor == Some(1009) || res3.factor == Some(1381));
         assert_eq!(res3.factor.unwrap() * res3.cofactor.unwrap(), 1393429);
+        assert_eq!(res3.sqrt_q.unwrap().pow(2), res3.square_q.unwrap());
 
         // n = 113 * 19573 = 2211749
         let res4 = squfof_factor(2211749, None).unwrap();
         assert!(res4.success);
         assert!(res4.factor == Some(113) || res4.factor == Some(19573));
         assert_eq!(res4.factor.unwrap() * res4.cofactor.unwrap(), 2211749);
+        assert_eq!(res4.sqrt_q.unwrap().pow(2), res4.square_q.unwrap());
 
         // Perfect square
         let res_sq = squfof_factor(169, None).unwrap();
