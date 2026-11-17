@@ -3382,8 +3382,8 @@ impl BigUint {
         }
         let mut res = Vec::with_capacity(self.digits.len());
         let mut borrow = 0i64;
-        for i in 0..self.digits.len() {
-            let a = self.digits[i] as i64;
+        for (i, &digit) in self.digits.iter().enumerate() {
+            let a = digit as i64;
             let b = other.digits.get(i).copied().unwrap_or(0) as i64;
             let diff = a - b - borrow;
             if diff < 0 {
