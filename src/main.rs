@@ -2838,7 +2838,7 @@ mod tests {
         let (status, info_body) =
             json_response(Request::get("/v1/info").body(Body::empty()).unwrap()).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(info_body["version"], "0.14.0");
+        assert_eq!(info_body["version"], env!("CARGO_PKG_VERSION"));
         let endpoints = info_body["endpoints"].as_array().unwrap();
         assert_eq!(endpoints.len(), 70);
         assert!(endpoints.iter().any(|e| e == "GET /v1/math/fermat"));
