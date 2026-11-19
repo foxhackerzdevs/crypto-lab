@@ -1,7 +1,8 @@
 [package]
 name = "crypto-lab"
-version = "0.14.1"
+version = "0.14.2"
 edition = "2021"
+rust-version = "1.87.0"
 
 [dependencies]
 axum = { version = "0.7", features = ["ws"] }

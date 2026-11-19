@@ -2387,6 +2387,9 @@ pub fn is_primitive_root(a: i64, m: i64) -> Result<bool, MathError> {
 
 // ------------------- Discrete Logarithm (BSGS) -------------------
 
+/// Largest baby-step table `discrete_log` will build (2^22 entries, roughly 100 MB).
+const MAX_BSGS_TABLE: i64 = 1 << 22;
+
 pub fn discrete_log(g: i64, h: i64, p: i64) -> Result<i64, MathError> {
     if p <= 1 {
         return Err(MathError(
@@ -2414,6 +2417,15 @@ pub fn discrete_log(g: i64, h: i64, p: i64) -> Result<i64, MathError> {
     let mut m = (order as f64).sqrt() as i64;
     if m * m < order {
         m += 1;
+    }
+    // The baby-step table costs about 24 bytes per entry. A modulus near 2^61 asked the
+    // allocator for 36.5 GB and it aborted the whole process (every other request and
+    // WebSocket session with it). Refuse instead of allocating.
+    if m > MAX_BSGS_TABLE {
+        return Err(MathError(
+            StatusCode::BAD_REQUEST,
+            "Group order too large for baby-step giant-step (limit is about 4 million table entries, i.e. an order below roughly 1.7e13)",
+        ));
     }
 
     let mut table = std::collections::HashMap::with_capacity(m as usize);
@@ -3880,6 +3892,16 @@ mod tests {
         assert!(discrete_log(2, 3, 7).is_err());
         assert!(discrete_log(2, 5, 1).is_err());
         assert!(discrete_log(2, 5, 6).is_err());
+    }
+
+    #[test]
+    fn test_discrete_log_refuses_oversized_tables() {
+        // p = 2^61 - 1 would ask for a ~36 GB baby-step table; the allocator aborted the
+        // whole process. It must be a clean 400 instead.
+        let err = discrete_log(3, 5, 2_305_843_009_213_693_951).unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        // A modulus within the cap still solves.
+        assert_eq!(discrete_log(5, 460716497, 1_000_000_007).unwrap(), 12345);
     }
 
     #[test]

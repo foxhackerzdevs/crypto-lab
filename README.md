@@ -77,7 +77,7 @@ Response:
 {
   "service": "crypto-lab",
   "api": "v1",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "endpoints": [
     "GET /health",
     "GET /v1/info",

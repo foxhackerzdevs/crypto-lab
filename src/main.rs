@@ -1373,13 +1373,53 @@ async fn math_fermat_post(
     handle_fermat(req)
 }
 
-fn handle_mersenne(req: MersenneRequest) -> Result<Json<MersenneResponse>, ApiError> {
+/// Mersenne-prime exponents up to this endpoint's ceiling of 5000.
+///
+/// Running Lucas-Lehmer over every prime exponent costs about 16 s of CPU, and the
+/// answer never changes. Doing that inside an async handler pinned a tokio worker, so
+/// two concurrent requests froze the whole service (including /health). Compute it
+/// once on the blocking pool and answer every request from the cache; `OnceCell`
+/// makes concurrent first requests share a single computation.
+static MERSENNE_CACHE: tokio::sync::OnceCell<Vec<u32>> = tokio::sync::OnceCell::const_new();
+
+#[cfg(test)]
+const MERSENNE_CEILING: u32 = 130;
+#[cfg(not(test))]
+const MERSENNE_CEILING: u32 = 5000;
+
+async fn mersenne_exponents_up_to(limit: u32) -> Result<Vec<u32>, ApiError> {
+    exponents_from_cache(&MERSENNE_CACHE, MERSENNE_CEILING, limit).await
+}
+
+/// Fill `cell` with every Mersenne exponent up to `ceiling` (once, on the blocking
+/// pool) and return those not above `limit`. Takes the cell as a parameter so tests
+/// can use a private one instead of the process-wide cache.
+async fn exponents_from_cache(
+    cell: &tokio::sync::OnceCell<Vec<u32>>,
+    ceiling: u32,
+    limit: u32,
+) -> Result<Vec<u32>, ApiError> {
+    let all = cell
+        .get_or_try_init(|| async move {
+            tokio::task::spawn_blocking(move || math::mersenne_primes(ceiling)).await
+        })
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Mersenne computation failed",
+            )
+        })?;
+    Ok(all.iter().copied().filter(|&p| p <= limit).collect())
+}
+
+async fn handle_mersenne(req: MersenneRequest) -> Result<Json<MersenneResponse>, ApiError> {
     if let Some(p) = req.p {
         let info = math::mersenne_info(p)?;
         Ok(Json(MersenneResponse::Single(info)))
     } else {
         let limit = req.limit.unwrap_or(127).min(5000);
-        let primes = math::mersenne_primes(limit);
+        let primes = mersenne_exponents_up_to(limit).await?;
         Ok(Json(MersenneResponse::List { limit, primes }))
     }
 }
@@ -1387,13 +1427,13 @@ fn handle_mersenne(req: MersenneRequest) -> Result<Json<MersenneResponse>, ApiEr
 async fn math_mersenne_get(
     Query(req): Query<MersenneRequest>,
 ) -> Result<Json<MersenneResponse>, ApiError> {
-    handle_mersenne(req)
+    handle_mersenne(req).await
 }
 
 async fn math_mersenne_post(
     Json(req): Json<MersenneRequest>,
 ) -> Result<Json<MersenneResponse>, ApiError> {
-    handle_mersenne(req)
+    handle_mersenne(req).await
 }
 
 fn handle_perfect(req: PerfectRequest) -> Result<Json<PerfectResponse>, ApiError> {
@@ -1754,7 +1794,8 @@ async fn execute_single_step(
 }
 
 async fn chamber_ws_handler(ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(handle_chamber_socket)
+    ws.max_message_size(64 * 1024)
+        .on_upgrade(handle_chamber_socket)
 }
 
 async fn handle_chamber_socket(mut socket: WebSocket) {
@@ -3182,5 +3223,29 @@ mod tests {
         .await;
         assert_eq!(status_chal, StatusCode::OK);
         assert_eq!(body_chal["topic"], "squfof");
+    }
+
+    #[tokio::test]
+    async fn mersenne_exponents_are_computed_once_and_sliced_per_request() {
+        // A private cell and a small ceiling: real Lucas-Lehmer, without the ~16 s of the
+        // production ceiling of 5000, and without touching the process-wide cache.
+        let cell = tokio::sync::OnceCell::new();
+        let first = exponents_from_cache(&cell, 130, 20).await.unwrap();
+        assert_eq!(first, vec![2, 3, 5, 7, 13, 17, 19]);
+        assert_eq!(
+            exponents_from_cache(&cell, 130, 130).await.unwrap(),
+            vec![2, 3, 5, 7, 13, 17, 19, 31, 61, 89, 107, 127]
+        );
+        assert!(exponents_from_cache(&cell, 130, 1)
+            .await
+            .unwrap()
+            .is_empty());
+        // Concurrent first callers share one computation and agree.
+        let shared = tokio::sync::OnceCell::new();
+        let (a, b) = tokio::join!(
+            exponents_from_cache(&shared, 130, 127),
+            exponents_from_cache(&shared, 130, 127)
+        );
+        assert_eq!(a.unwrap(), b.unwrap());
     }
 }
