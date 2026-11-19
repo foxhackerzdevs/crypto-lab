@@ -9,6 +9,12 @@ ExecStart=/usr/local/bin/crypto-lab
 Restart=on-failure
 RestartSec=3s
 
+# Resource & cgroup limits (safeguards 1GB RAM / 2-vCPU t4g.micro host)
+MemoryMax=300M
+TasksMax=64
+CPUQuota=150%
+
+# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
