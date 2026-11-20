@@ -1794,7 +1794,11 @@ async fn execute_single_step(
 }
 
 async fn chamber_ws_handler(ws: WebSocketUpgrade) -> Response {
+    // Cap the frame size too: tungstenite checks `max_message_size` only after a whole
+    // frame has been read, and the default frame limit is 16 MiB, so a single large
+    // frame still made the server buffer that much per connection before rejecting it.
     ws.max_message_size(64 * 1024)
+        .max_frame_size(64 * 1024)
         .on_upgrade(handle_chamber_socket)
 }
 
